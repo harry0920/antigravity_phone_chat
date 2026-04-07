@@ -903,6 +903,9 @@ historyBtn.addEventListener('click', showChatHistory);
 
 // --- Select Chat from History ---
 async function selectChat(title) {
+    // Visual reset while desktop switches conversation
+    chatContent.innerHTML = '<div class="loading-state"><div class="loading-spinner"></div><p>Switching Conversation...</p></div>';
+
     try {
         const res = await fetchWithAuth('/select-chat', {
             method: 'POST',
@@ -912,14 +915,20 @@ async function selectChat(title) {
         const data = await res.json();
 
         if (data.success) {
-            setTimeout(loadSnapshot, 300);
-            setTimeout(loadSnapshot, 800);
-            setTimeout(checkChatStatus, 1000);
+            // Persistent polling to catch delayed desktop render/update
+            let attempts = 0;
+            const poll = setInterval(async () => {
+                await loadSnapshot();
+                attempts++;
+                if (attempts > 10) clearInterval(poll);
+            }, 500);
         } else {
             console.error('Failed to select chat:', data.error);
+            setTimeout(loadSnapshot, 500);
         }
     } catch (e) {
         console.error('Select chat error:', e);
+        setTimeout(loadSnapshot, 500);
     }
 }
 

@@ -1112,9 +1112,10 @@ async function getChatHistory(cdp) {
                 // Chat titles are in <span> elements
                 const spans = Array.from(panel.querySelectorAll('span'));
                 
-                // Section headers to skip
+                // Section headers and workspace labels to skip
                 const SKIP_EXACT = new Set([
-                    'current', 'other conversations', 'now'
+                    'current', 'other conversations', 'now',
+                    'projects', 'personal', 'workspace', 'default', 'phone connect antigravity'
                 ]);
                 
                 for (const span of spans) {
@@ -1123,6 +1124,22 @@ async function getChatHistory(cdp) {
                     
                     // Skip empty or too short
                     if (text.length < 3) continue;
+
+                    // Sibling-span heuristic: skip tag/badge labels (like workspaces)
+                    // If a short span has a longer sibling span, it's likely a tag next to the actual title
+                    if (text.length < 40 && span.parentElement) {
+                        let hasLongerSiblingSpan = false;
+                        for (const child of span.parentElement.children) {
+                            if (child !== span && child.tagName === 'SPAN') {
+                                const childTextLength = (child.textContent?.trim() || '').length;
+                                if (childTextLength > text.length) {
+                                    hasLongerSiblingSpan = true;
+                                    break;
+                                }
+                            }
+                        }
+                        if (hasLongerSiblingSpan) continue;
+                    }
                     
                     // Skip section headers
                     if (SKIP_EXACT.has(lower)) continue;
@@ -1178,105 +1195,184 @@ async function selectChat(cdp, chatTitle) {
     const safeChatTitle = JSON.stringify(chatTitle);
 
     const EXP = `(async () => {
-    try {
-        const targetTitle = ${safeChatTitle};
+        try {
+            const targetTitle = ${safeChatTitle};
+            let debugInfo = [];
+            const log = (msg) => debugInfo.push(msg);
+            log('Starting selectChat for: ' + targetTitle);
 
-        // First, we need to open the history panel
-        // Find the history button at the top (next to + button)
-        const allButtons = Array.from(document.querySelectorAll('button, [role="button"]'));
-
-        let historyBtn = null;
-
-        // Find by icon type
-        for (const btn of allButtons) {
-            if (btn.offsetParent === null) continue;
-            const hasHistoryIcon = btn.querySelector('svg.lucide-clock') ||
-                btn.querySelector('svg.lucide-history') ||
-                btn.querySelector('svg.lucide-folder') ||
-                btn.querySelector('svg.lucide-clock-rotate-left');
-            if (hasHistoryIcon) {
-                historyBtn = btn;
-                break;
-            }
-        }
-
-        // Fallback: Find by position (second button at top)
-        if (!historyBtn) {
-            const topButtons = allButtons.filter(btn => {
-                if (btn.offsetParent === null) return false;
-                const rect = btn.getBoundingClientRect();
-                return rect.top < 100 && rect.top > 0;
-            }).sort((a, b) => a.getBoundingClientRect().left - b.getBoundingClientRect().left);
-
-            if (topButtons.length >= 2) {
-                historyBtn = topButtons[1];
-            }
-        }
-
-        if (historyBtn) {
-            historyBtn.click();
-            await new Promise(r => setTimeout(r, 600));
-        }
-
-        // Now find the chat by title in the opened panel
-        await new Promise(r => setTimeout(r, 200));
-
-        const allElements = Array.from(document.querySelectorAll('*'));
-
-        // Find elements matching the title
-        const candidates = allElements.filter(el => {
-            if (el.offsetParent === null) return false;
-            const text = el.innerText?.trim();
-            return text && text.startsWith(targetTitle.substring(0, Math.min(30, targetTitle.length)));
-        });
-
-        // Find the most specific (deepest) visible element with the title
-        let target = null;
-        let maxDepth = -1;
-
-        for (const el of candidates) {
-            // Skip if it has too many children (likely a container)
-            if (el.children.length > 5) continue;
-
-            let depth = 0;
-            let parent = el;
-            while (parent) {
-                depth++;
-                parent = parent.parentElement;
-            }
-
-            if (depth > maxDepth) {
-                maxDepth = depth;
-                target = el;
-            }
-        }
-
-        if (target) {
-            // Find clickable parent if needed
-            let clickable = target;
-            for (let i = 0; i < 5; i++) {
-                if (!clickable) break;
-                const style = window.getComputedStyle(clickable);
-                if (style.cursor === 'pointer' || clickable.tagName === 'BUTTON') {
-                    break;
+            // 1. Open History Panel (same robust method style as getChatHistory)
+            let historyBtn = document.querySelector('[data-tooltip-id="history-tooltip"]');
+            
+            if (!historyBtn) {
+                const allButtons = Array.from(document.querySelectorAll('button, [role="button"]'));
+                
+                // Try icon first
+                historyBtn = allButtons.find(btn => {
+                    if (btn.offsetParent === null) return false;
+                    return btn.querySelector('svg.lucide-clock') ||
+                        btn.querySelector('svg.lucide-history') ||
+                        btn.querySelector('svg.lucide-folder') ||
+                        btn.querySelector('svg.lucide-clock-rotate-left');
+                });
+                
+                // Try position strategy (second button near new chat)
+                if (!historyBtn) {
+                    const topButtons = allButtons.filter(btn => {
+                        if (btn.offsetParent === null) return false;
+                        const rect = btn.getBoundingClientRect();
+                        return rect.top < 100 && rect.top > 0;
+                    }).sort((a, b) => a.getBoundingClientRect().left - b.getBoundingClientRect().left);
+                    
+                    if (topButtons.length >= 2) historyBtn = topButtons[1];
                 }
-                clickable = clickable.parentElement;
             }
 
-            if (clickable) {
-                clickable.click();
-                return { success: true, method: 'clickable_parent' };
+            if (!historyBtn) return { error: 'History button not found', debug: debugInfo };
+
+            historyBtn.click();
+            log('Clicked history button');
+
+            // 2. Wait-for-visible polling (up to 3s)
+            let panel = null;
+            let panelFound = false;
+            for (let i = 0; i < 15; i++) {
+                await new Promise(r => setTimeout(r, 200));
+
+                const inputs = Array.from(document.querySelectorAll('input[type="text"]'));
+                const searchInput = inputs.find(input =>
+                    input.offsetParent !== null &&
+                    (input.placeholder?.toLowerCase().includes('select') ||
+                     input.placeholder?.toLowerCase().includes('conversation') ||
+                     input.className.includes('w-full'))
+                );
+
+                const allSpans = Array.from(document.querySelectorAll('span, div, p'));
+                const anchorSpan = allSpans.find(s => s.offsetParent !== null && (s.innerText || '').trim() === 'Current');
+
+                const anchor = searchInput || anchorSpan;
+                if (anchor) {
+                    let container = anchor;
+                    for (let j = 0; j < 15; j++) {
+                        if (!container) break;
+                        const rect = container.getBoundingClientRect();
+                        if (rect.width > 50 && rect.height > 100) {
+                            const style = window.getComputedStyle(container);
+                            if (style.position === 'fixed' || style.position === 'absolute' || style.zIndex > 10) {
+                                panel = container;
+                                panelFound = true;
+                                break;
+                            }
+                        }
+                        container = container.parentElement;
+                    }
+                }
+                if (panelFound) break;
             }
 
-            target.click();
-            return { success: true, method: 'direct_click' };
+            if (!panelFound) return { error: 'History panel did not open', debug: debugInfo };
+            log('Panel found');
+
+            // Give panel a bit more time to render list items
+            await new Promise(r => setTimeout(r, 300));
+
+            // 3. Scored fuzzy matching
+            let candidates = Array.from(panel.querySelectorAll('span, p, div'))
+                .filter(el => {
+                    const text = el.textContent?.trim() || '';
+                    return text.length >= 3 && el.children.length === 0 && el.offsetParent !== null;
+                })
+                .map(el => {
+                    const text = el.textContent.trim();
+                    const targetLower = targetTitle.toLowerCase();
+                    const textLower = text.toLowerCase();
+
+                    let score = 0;
+                    if (text === targetTitle) score += 100;
+                    else if (textLower === targetLower) score += 90;
+                    else if (text.includes(targetTitle)) score += 60;
+                    else if (textLower.includes(targetLower)) score += 50;
+                    else if (targetLower.includes(textLower)) score += 40;
+                    else if (textLower.startsWith(targetLower.substring(0, Math.min(20, targetLower.length)))) score += 30;
+
+                    // Penalty for tiny labels/tags
+                    if (text.length < 5) score -= 10;
+
+                    // Bonus for deeper nodes (usually more specific)
+                    let depth = 0;
+                    let p = el;
+                    while (p) { depth++; p = p.parentElement; }
+                    score += depth;
+
+                    return { el, text, score };
+                })
+                .filter(c => c.score >= 30)
+                .sort((a, b) => b.score - a.score);
+
+            if (candidates.length === 0) return { error: 'Chat title not found in panel', title: targetTitle, debug: debugInfo };
+
+            log('Found ' + candidates.length + ' candidates. Best match: "' + candidates[0].text + '" (Score: ' + candidates[0].score + ')');
+
+            // 4. Click execution with MouseEvent fallback
+            const executeClick = (targetEl) => {
+                let clickable = targetEl;
+                let foundClickable = false;
+
+                for (let i = 0; i < 5; i++) {
+                    if (!clickable) break;
+                    const style = window.getComputedStyle(clickable);
+                    if (style.cursor === 'pointer' || clickable.tagName === 'BUTTON' || clickable.onclick) {
+                        foundClickable = true;
+                        break;
+                    }
+                    if (clickable.parentElement) clickable = clickable.parentElement;
+                }
+
+                const finalTarget = foundClickable ? clickable : targetEl;
+                finalTarget.click();
+
+                try {
+                    const rect = finalTarget.getBoundingClientRect();
+                    const centerX = rect.left + (rect.width / 2);
+                    const centerY = rect.top + (rect.height / 2);
+                    const events = ['mousedown', 'mouseup', 'click'];
+                    events.forEach(type => {
+                        finalTarget.dispatchEvent(new MouseEvent(type, {
+                            view: window,
+                            bubbles: true,
+                            cancelable: true,
+                            clientX: centerX,
+                            clientY: centerY,
+                            button: 0
+                        }));
+                    });
+                } catch (e) {
+                    log('MouseEvent fallback failed: ' + e.message);
+                }
+            };
+
+            executeClick(candidates[0].el);
+            log('Executed click on candidate 0');
+
+            // 5. Verify/retry if panel still open
+            await new Promise(r => setTimeout(r, 1500));
+            const isPanelStillOpen = panel.offsetParent !== null && panel.style.display !== 'none' && panel.getBoundingClientRect().height > 0;
+
+            if (isPanelStillOpen && candidates.length > 1) {
+                log('Panel still open, retrying with candidate 1: "' + candidates[1].text + '"');
+                executeClick(candidates[1].el);
+                await new Promise(r => setTimeout(r, 1000));
+            }
+
+            // Ensure panel closes
+            document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', bubbles: true }));
+            document.dispatchEvent(new KeyboardEvent('keyup', { key: 'Escape', code: 'Escape', bubbles: true }));
+
+            return { success: true, method: 'heuristic_click', bestMatch: candidates[0].text, retried: isPanelStillOpen, debug: debugInfo };
+        } catch (e) {
+            return { error: 'JS Exception: ' + e.toString() };
         }
-
-        return { error: 'Chat not found: ' + targetTitle };
-    } catch (e) {
-        return { error: e.toString() };
-    }
-})()`;
+    })()`;
 
     for (const ctx of cdp.contexts) {
         try {
