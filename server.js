@@ -222,8 +222,23 @@ async function captureSnapshot(cdp) {
             scrollPercent: scrollContainer.scrollTop / (scrollContainer.scrollHeight - scrollContainer.clientHeight) || 0
         };
         
+        // Mark fixed/absolute elements in the original DOM before cloning
+        // This is the only way to reliably catch CSS-class-based positioning
+        const candidates = cascade.querySelectorAll('*');
+        candidates.forEach(el => {
+            try {
+                const pos = window.getComputedStyle(el).position;
+                if (pos === 'fixed' || pos === 'absolute') {
+                    el.setAttribute('data-ag-rem', 'true');
+                }
+            } catch(e) {}
+        });
+
         // Clone cascade to modify it without affecting the original
         const clone = cascade.cloneNode(true);
+        
+        // Clean up markers from the original DOM immediately after cloning
+        candidates.forEach(el => el.removeAttribute('data-ag-rem'));
         
         // Aggressively remove the entire interaction/input/review area
         try {
@@ -254,11 +269,10 @@ async function captureSnapshot(cdp) {
                                            text.includes('confirm');
                         
                         // BUT: If it's specifically an input-related element, we DON'T protect it
-                        const isEditor = el.hasAttribute('contenteditable') || 
+                        const isEditor = el.getAttribute('contenteditable') === 'true' || 
                                        el.hasAttribute('data-lexical-editor') ||
                                        text.includes('ask anything') ||
                                        text.includes('to mention');
-
                         if (!isEditor && isActionArea && selector !== '[contenteditable="true"]') {
                             return; // Protect action bars
                         }
@@ -336,17 +350,17 @@ async function captureSnapshot(cdp) {
                 } catch(e) {}
             });
 
-            // 4. Force hide any fixed/absolute elements appearing at the bottom (desktop overlays)
-            // But exclude the Action Bars we want to keep
-            clone.querySelectorAll('*').forEach(el => {
+            // 4. Force hide any fixed/absolute elements (desktop overlays)
+            // These were marked in the original before cloning to ensure accurate computed styles
+            clone.querySelectorAll('[data-ag-rem]').forEach(el => {
                 try {
-                    const style = el.getAttribute('style') || '';
-                    if (style.includes('position: fixed') || style.includes('position: absolute')) {
-                        const text = (el.innerText || '').toLowerCase();
-                        if (text.includes('allow') || text.includes('deny') || text.includes('review')) return;
-                        el.style.display = 'none';
-                        el.remove();
+                    const text = (el.innerText || '').toLowerCase();
+                    // Exclude Action Bars we want to keep
+                    if (text.includes('allow') || text.includes('deny') || text.includes('review')) {
+                        el.removeAttribute('data-ag-rem');
+                        return;
                     }
+                    el.remove();
                 } catch(e) {}
             });
         } catch (globalErr) { }

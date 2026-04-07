@@ -1129,18 +1129,20 @@ chatContainer.addEventListener('click', async (e) => {
     const btn = e.target.closest('button, [role="button"]');
     if (btn) {
         const btnText = (btn.innerText || '').trim();
-        
+
         // Match various action keywords
         const actionKeywords = [
-            'Run', 'Reject', 'Allow', 'Deny', 'Confirm', 'Accept', 
-            'Yes', 'No', 'Always allow', 'Allow once', 'Allow this conversation',
-            'Review', 'Review changes', 'Apply', 'Save', 'Discard'
+            'Allow this conversation', 'Always allow', 'Allow once',
+            'Review changes', 'Review',
+            'Confirm', 'Accept', 'Reject', 'Discard',
+            'Allow', 'Deny', 'Apply', 'Save', 'Run',
+            'Yes', 'No'
         ];
-        
-        const matchedKeyword = actionKeywords.find(kw => 
-            btnText.toLowerCase().includes(kw.toLowerCase())
-        );
 
+        const btnTextLower = btnText.toLowerCase();
+        const matchedKeyword = actionKeywords.find(kw =>
+            btnTextLower.includes(kw.toLowerCase())
+        );
         if (matchedKeyword) {
             btn.style.opacity = '0.5';
             setTimeout(() => btn.style.opacity = '1', 300);
@@ -1149,7 +1151,7 @@ chatContainer.addEventListener('click', async (e) => {
             const allButtons = Array.from(chatContainer.querySelectorAll('button, [role="button"]'));
 
             // Filter to only those that match our specific keyword
-            const matchingButtons = allButtons.filter(b => 
+            const matchingButtons = allButtons.filter(b =>
                 (b.innerText || '').toLowerCase().includes(matchedKeyword.toLowerCase())
             );
             const btnIndex = matchingButtons.indexOf(btn);
@@ -1164,7 +1166,7 @@ chatContainer.addEventListener('click', async (e) => {
                         textContent: matchedKeyword
                     })
                 });
-                
+
                 // Rapidly poll for updates as actions usually trigger DOM changes
                 setTimeout(loadSnapshot, 400);
                 setTimeout(loadSnapshot, 1000);
