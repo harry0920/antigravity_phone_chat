@@ -1,31 +1,32 @@
 # Security Audit Report
 
-**Date of Scan:** 2026-02-27
-**Scope:** `antigravity_phone_chat` core server and client files.
+**Date of Scan:** 2026-04-07
+**Scope:** `antigravity_phone_chat` core server, client, and transition logic.
 **Standard:** OWASP Top 10
 
-## 🟢 1. Secrets Management
+## 🟡 1. Secrets Management
 **Status: Warning**
-- **Observation:** `server.js` correctly relies on `.env` for `APP_PASSWORD` and `SESSION_SECRET`.
-- **Finding:** Hardcoded fallback values (`'antigravity'` and `'antigravity_secret_key_1337'`) exist in `server.js`. While the system enforces strict cookie/password requirements for remote connections, relying on these default literals if a `.env` file is missing can pose a deterministic attack vector if the server relies solely on them in Web Mode.
-- **Resolution/Mitigation:** The `launcher.py` and bash scripts correctly enforce `.env` generation before launching, significantly reducing the likelihood of falling back to default literals.
+- **Observation:** `server.js` relies on `.env` for `APP_PASSWORD`, `AUTH_SALT`, and `SESSION_SECRET`.
+- **Finding:** Hardcoded fallback values (`'antigravity'`, `'antigravity_default_salt_99'`, and `'antigravity_secret_key_1337'`) exist in `server.js`.
+- **Note:** The `launcher.py` mitigates this by generating a random 6-digit passcode if `APP_PASSWORD` is missing, but the fallback remains in the JS code for manual runs.
+- **Recommendation:** Enforcement of `.env` presence in `server.js` or throwing an error if predictable defaults are used in non-local environments.
 
-## 🟢 2. Injection flaws (XSS/SQLi)
-**Status: Passed**
-- **Observation:** `app.js` relies heavily on `innerHTML` for state mirroring (`chatContent.innerHTML = data.html`).
-- **Finding:** Because `data.html` is strictly composed of clones from the desktop application's DOM (via Chrome DevTools Protocol), the injection risk is identical to the underlying Antigravity app. 
-- **Additionally:** The chat history extraction (`server.js`) strictly utilizes a custom `escapeHtml()` utility to sanitize raw IDE `innerText` before it is transmitted back to the client interface, preventing standard string-based XSS attacks on the history view.
+## 🟢 2. Injection flaws (XSS/XSRF)
+**Status: Hardened**
+- **Refactor (April 2026):** We have implemented a strict **Content Security Policy (CSP)** in `index.html`. 
+- **Finding:** We have successfully removed 100% of inline `onclick` handlers and logic from the frontend DOM. 
+- **Resolution:** `script-src` is now set to `'self'`, explicitly disallowing `'unsafe-inline'`. This prevents the execution of malicious scripts injected into the mirrored snapshot, substantially mitigating the XSS risk.
 
 ## 🟢 3. Authentication & Authorization
-**Status: Passed**
-- **Observation:** The express server enforces an implicit Zero-Trust policy on external IPs but implements an "Always Allow" policy for local network requests.
-- **Finding:** API routes are guarded securely and `httpOnly` signed cookies are deployed.
-- **Note:** The `bypass LAN` auth design represents a conscious usability tradeoff. Access implies physical network presence. 
+**Status: Secure**
+- **Observation:** The server automatically detects if default credentials (`APP_PASSWORD`, `AUTH_SALT`, or `SESSION_SECRET`) are in use.
+- **Finding:** If predictable values are detected, high-visibility ⚠️ warnings are printed to the server console on startup.
+- **Resolution:** QR codes for magic links facilitate encrypted session handling. Signed `httpOnly` sessions are enforced across all non-LAN interfaces.
 
 ## 🟢 4. Dependency Analysis
 **Status: Passed**
-- **Observation:** Core dependencies (`express`, `ws`, `cookie-parser`, `dotenv`) are cleanly defined without bloated sub-dependencies.
-- **Finding:** No immediate critical supply chain vulnerabilities observed.
+- **Observation:** Dependencies are minimal and versioned. `express`, `ws`, and `cookie-parser` are kept up to date.
+- **Finding:** No known critical vulnerabilities in the current dependency tree.
 
 ---
-**Conclusion:** The repository is in strong standing. The underlying architecture explicitly proxies to a sandboxed desktop DOM environment, dramatically reducing server-side execution risks.
+**Conclusion:** The repository maintains a strong security posture with robust session management and signed cookies. The primary risks are localized to the LAN-trust model and potential XSS via mirrored DOM snapshots.

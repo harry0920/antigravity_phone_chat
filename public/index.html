@@ -11,6 +11,8 @@
         href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap"
         rel="stylesheet">
     <link rel="stylesheet" href="css/style.css">
+    <!-- Security: Content Security Policy -->
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self' https://fonts.googleapis.com https://fonts.gstatic.com; img-src 'self' data:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; script-src 'self';">
 </head>
 
 <body>
@@ -74,8 +76,8 @@
     <!-- SSL Banner (shown when running HTTP) -->
     <div class="ssl-banner" id="sslBanner" style="display: none;">
         <span>⚠️ Not Secure - Running on HTTP</span>
-        <button id="enableHttpsBtn" onclick="enableHttps()">Enable HTTPS</button>
-        <button class="dismiss-btn" onclick="dismissSslBanner()">×</button>
+        <button id="enableHttpsBtn">Enable HTTPS</button>
+        <button class="dismiss-btn">×</button>
     </div>
 
     <!-- Chat Container -->
@@ -97,15 +99,10 @@
 
     <!-- Quick Actions -->
     <div class="quick-actions">
-        <div class="action-chip" onclick="quickAction('Continue')">Continue
-        </div>
-        <div class="action-chip" onclick="quickAction('Explain this code in detailed and elaborate manner.')">Explain
-        </div>
-        <div class="action-chip" onclick="quickAction('Please fix the bugs in this code...')">Fix Bugs
-        </div>
-        <div class="action-chip" onclick="quickAction('Please create or update documentation for this code.')">Create
-            Docs
-        </div>
+        <div class="action-chip">Continue</div>
+        <div class="action-chip">Explain Code</div>
+        <div class="action-chip">Fix Bugs</div>
+        <div class="action-chip">Create Docs</div>
     </div>
 
     <!-- Input Section -->
@@ -130,7 +127,7 @@
             <div class="modal-title" id="modalTitle">Select Option</div>
             <div id="modalList"></div>
             <div style="margin-top:20px; text-align:center;">
-                <button onclick="closeModal()"
+                <button id="closeModalBtn"
                     style="background:transparent; border:none; color:var(--text-muted); padding:10px;">Cancel</button>
             </div>
         </div>
@@ -139,7 +136,7 @@
     <!-- History Layer (Full Screen) -->
     <div class="history-layer" id="historyLayer">
         <div class="history-header">
-            <button class="icon-btn" onclick="hideChatHistory()" aria-label="Back">
+            <button class="icon-btn" aria-label="Back">
                 <svg viewBox="0 0 24 24" width="24" height="24">
                     <path d="M19 12H5M12 19l-7-7 7-7" stroke="currentColor" stroke-width="2" stroke-linecap="round"
                         stroke-linejoin="round" />

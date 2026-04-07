@@ -21,6 +21,13 @@ const modelText = document.getElementById('modelText');
 const historyLayer = document.getElementById('historyLayer');
 const historyList = document.getElementById('historyList');
 
+// New elements for event listeners
+const enableHttpsBtn = document.getElementById('enableHttpsBtn');
+const dismissSslBtn = document.querySelector('.dismiss-btn');
+const closeModalBtn = document.getElementById('closeModalBtn');
+const backHistoryBtn = document.querySelector('.history-header .icon-btn');
+const quickActionChips = document.querySelectorAll('.action-chip');
+
 // --- State ---
 let autoRefreshEnabled = true;
 let userIsScrolling = false;
@@ -100,9 +107,13 @@ async function enableHttps() {
         if (data.success) {
             sslBanner.innerHTML = `
                 <span>✅ ${data.message}</span>
-                <button onclick="location.reload()">Reload After Restart</button>
+                <button id="sslReloadBtn">Reload After Restart</button>
             `;
             sslBanner.style.background = 'linear-gradient(90deg, #22c55e, #16a34a)';
+            
+            // Add listener to the newly created button
+            const reloadBtn = document.getElementById('sslReloadBtn');
+            if (reloadBtn) reloadBtn.addEventListener('click', () => location.reload());
         } else {
             btn.textContent = 'Failed - Retry';
             btn.disabled = false;
@@ -807,7 +818,7 @@ async function showChatHistory() {
                     <div class="history-state-icon">⚠️</div>
                     <div class="history-state-title">Error loading history</div>
                     <div class="history-state-desc">${data.error}</div>
-                    <button class="history-new-btn mt-4" onclick="hideChatHistory(); startNewChat();">
+                    <button class="history-new-btn mt-4">
                         <svg viewBox="0 0 24 24" width="20" height="20" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round">
                             <line x1="12" y1="5" x2="12" y2="19"></line>
                             <line x1="5" y1="12" x2="19" y2="12"></line>
@@ -826,7 +837,7 @@ async function showChatHistory() {
                     <div class="history-state-icon">📝</div>
                     <div class="history-state-title">No recent chats found</div>
                     <div class="history-state-desc">Start a new conversation to see them here.</div>
-                    <button class="history-new-btn mt-4" onclick="hideChatHistory(); startNewChat();">
+                    <button class="history-new-btn mt-4">
                         <svg viewBox="0 0 24 24" width="20" height="20" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round">
                             <line x1="12" y1="5" x2="12" y2="19"></line>
                             <line x1="5" y1="12" x2="19" y2="12"></line>
@@ -841,7 +852,7 @@ async function showChatHistory() {
         // Render chats
         let html = `
             <div class="history-action-container">
-                <button class="history-new-btn" onclick="hideChatHistory(); startNewChat();">
+                <button class="history-new-btn">
                     <svg viewBox="0 0 24 24" width="20" height="20" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round">
                         <line x1="12" y1="5" x2="12" y2="19"></line>
                         <line x1="5" y1="12" x2="19" y2="12"></line>
@@ -855,7 +866,7 @@ async function showChatHistory() {
         chats.forEach(chat => {
             const safeTitle = chat.title.replace(/"/g, '&quot;').replace(/'/g, '&#39;');
             html += `
-                <div class="history-card" onclick="hideChatHistory(); selectChat('${safeTitle}');">
+                <div class="history-card" data-title="${safeTitle}">
                     <div class="history-card-icon">
                         <svg viewBox="0 0 24 24" width="20" height="20" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round">
                             <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path>
@@ -958,7 +969,7 @@ function showEmptyState() {
             </svg>
             <h2>No Chat Open</h2>
             <p>Start a new conversation or select one from your history to begin chatting.</p>
-            <button class="empty-state-btn" onclick="startNewChat()">
+            <button class="empty-state-btn" id="newChatFromEmptyBtn">
                 Start New Conversation
             </button>
         </div>
@@ -982,10 +993,10 @@ function openModal(title, options, onSelect) {
         const div = document.createElement('div');
         div.className = 'modal-option';
         div.textContent = opt;
-        div.onclick = () => {
+        div.addEventListener('click', () => {
             onSelect(opt);
             closeModal();
-        };
+        });
         modalList.appendChild(div);
     });
     modalOverlay.classList.add('show');
@@ -1184,6 +1195,52 @@ chatContainer.addEventListener('click', async (e) => {
                 console.error('Remote button click failed:', err);
             }
         }
+    }
+});
+
+// --- Initial Event Listeners (Refactored from inline) ---
+if (enableHttpsBtn) enableHttpsBtn.addEventListener('click', enableHttps);
+if (dismissSslBtn) dismissSslBtn.addEventListener('click', dismissSslBanner);
+if (closeModalBtn) closeModalBtn.addEventListener('click', closeModal);
+if (backHistoryBtn) backHistoryBtn.addEventListener('click', hideChatHistory);
+
+quickActionChips.forEach(chip => {
+    chip.addEventListener('click', () => {
+        const actionText = chip.getAttribute('data-action') || chip.innerText.trim();
+        // Handle specific cases if needed, otherwise just pass the text
+        if (actionText.includes('Explain')) {
+            quickAction('Explain this code in detailed and elaborate manner.');
+        } else if (actionText.includes('Fix')) {
+            quickAction('Please fix the bugs in this code...');
+        } else if (actionText.includes('Create')) {
+            quickAction('Please create or update documentation for this code.');
+        } else {
+            quickAction(actionText);
+        }
+    });
+});
+
+// Delegation for dynamic history items
+if (historyList) {
+    historyList.addEventListener('click', (e) => {
+        const newBtn = e.target.closest('.history-new-btn');
+        const card = e.target.closest('.history-card');
+        
+        if (newBtn) {
+            hideChatHistory();
+            startNewChat();
+        } else if (card) {
+            const title = card.getAttribute('data-title');
+            hideChatHistory();
+            selectChat(title);
+        }
+    });
+}
+
+// Delegation for empty state
+chatContent.addEventListener('click', (e) => {
+    if (e.target.closest('#newChatFromEmptyBtn')) {
+        startNewChat();
     }
 });
 

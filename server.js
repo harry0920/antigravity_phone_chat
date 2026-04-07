@@ -22,6 +22,13 @@ const POLL_INTERVAL = 1000; // 1 second
 const SERVER_PORT = process.env.PORT || 3000;
 const APP_PASSWORD = process.env.APP_PASSWORD || 'antigravity';
 const AUTH_COOKIE_NAME = 'ag_auth_token';
+
+// Security warning for default credentials
+if (APP_PASSWORD === 'antigravity') {
+    console.warn('\n\x1b[33m%s\x1b[0m', '⚠️  SECURITY WARNING: Using default APP_PASSWORD ("antigravity").');
+    console.warn('\x1b[33m%s\x1b[0m', '   Set a strong APP_PASSWORD in your .env file for production use.\n');
+}
+
 // Note: hashString is defined later, so we'll initialize the token inside createServer or use a simple string for now.
 let AUTH_TOKEN = 'ag_default_token';
 
@@ -1682,6 +1689,11 @@ async function createServer() {
 
     // Use a secure session secret from .env if available
     const sessionSecret = process.env.SESSION_SECRET || 'antigravity_secret_key_1337';
+
+    if (sessionSecret === 'antigravity_secret_key_1337') {
+        console.warn('\n\x1b[33m%s\x1b[0m', '⚠️  SECURITY WARNING: Using default SESSION_SECRET ("antigravity_secret_key_1337").');
+        console.warn('\x1b[33m%s\x1b[0m', '   Set a strong SESSION_SECRET in your .env file for production use.\n');
+    }
     app.use(cookieParser(sessionSecret));
 
     // Ngrok Bypass Middleware
@@ -2088,6 +2100,11 @@ async function createServer() {
             isAuthenticated = true;
         } else if (signedToken) {
             const sessionSecret = process.env.SESSION_SECRET || 'antigravity_secret_key_1337';
+
+            if (sessionSecret === 'antigravity_secret_key_1337') {
+                // Warning already printed on startup, but we check here for token verification
+            }
+
             const token = cookieParser.signedCookie(signedToken, sessionSecret);
             if (token === AUTH_TOKEN) {
                 isAuthenticated = true;
