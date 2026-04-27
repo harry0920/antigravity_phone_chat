@@ -13,6 +13,8 @@ const historyBtn = document.getElementById('historyBtn');
 
 const modeBtn = document.getElementById('modeBtn');
 const modelBtn = document.getElementById('modelBtn');
+const workspaceBtn = document.getElementById('workspaceBtn');
+const workspaceText = document.getElementById('workspaceText');
 const modalOverlay = document.getElementById('modalOverlay');
 const modalList = document.getElementById('modalList');
 const modalTitle = document.getElementById('modalTitle');
@@ -41,6 +43,8 @@ let idleTimer = null;
 let lastHash = '';
 let currentMode = 'Fast';
 let chatIsOpen = true; // Track if a chat is currently open
+let workspaces = [];
+let currentWorkspaceId = null;
 
 
 // --- Auth Utilities ---
@@ -96,6 +100,21 @@ async function checkSslStatus() {
     if (localStorage.getItem('sslBannerDismissed')) return;
 
     sslBanner.style.display = 'flex';
+}
+
+async function fetchWorkspaces() {
+    try {
+        const res = await fetchWithAuth('/api/workspaces');
+        const data = await res.json();
+        workspaces = data.workspaces || [];
+        currentWorkspaceId = data.currentWorkspaceId;
+
+        const active = workspaces.find(w => w.id === currentWorkspaceId);
+        if (active && workspaceText) {
+            workspaceText.textContent = active.name;
+        }
+        console.log('[SYNC] Workspaces loaded:', workspaces);
+    } catch (e) { console.error('[SYNC] Failed to fetch workspaces', e); }
 }
 
 async function enableHttps() {
@@ -1085,6 +1104,41 @@ modelBtn.addEventListener('click', () => {
     });
 });
 
+if (workspaceBtn) {
+    workspaceBtn.addEventListener('click', () => {
+        const options = workspaces.map(w => w.name);
+        openModal('Select Workspace', options, async (name) => {
+            const workspace = workspaces.find(w => w.name === name);
+            if (!workspace) return;
+
+            const prev = workspaceText.textContent;
+            workspaceText.textContent = 'Switching...';
+
+            try {
+                const res = await fetchWithAuth('/api/switch-workspace', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ id: workspace.id })
+                });
+                const data = await res.json();
+                
+                if (data.success) {
+                    workspaceText.textContent = workspace.name;
+                    currentWorkspaceId = workspace.id;
+                    // Trigger immediate refresh
+                    loadSnapshot();
+                    fetchAppState();
+                } else {
+                    alert('Error: ' + (data.error || 'Unknown'));
+                    workspaceText.textContent = prev;
+                }
+            } catch (e) {
+                workspaceText.textContent = prev;
+            }
+        });
+    });
+}
+
 // --- Viewport / Keyboard Handling ---
 // This fixes the issue where the keyboard hides the input or layout breaks
 if (window.visualViewport) {
@@ -1276,7 +1330,9 @@ chatContent.addEventListener('click', (e) => {
 connectWebSocket();
 // Sync state initially and every 5 seconds to keep phone in sync with desktop changes
 fetchAppState();
+fetchWorkspaces();
 setInterval(fetchAppState, 5000);
+setInterval(fetchWorkspaces, 15000);
 
 // Check chat status initially and periodically
 checkChatStatus();

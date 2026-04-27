@@ -1,0 +1,20 @@
+[
+    {
+        "id": "global_phone_connect",
+        "name": "Global Phone Connect",
+        "path": "/Users/harry/Anti Gravity Projects/Global_Phone_Connect",
+        "port": 9000
+    },
+    {
+        "id": "my_web_project",
+        "name": "My Web Project",
+        "path": "/Users/harry/Anti Gravity Projects/My_Web_Project",
+        "port": 9001
+    },
+    {
+        "id": "automation_hub",
+        "name": "Automation Hub",
+        "path": "/Users/harry/Anti Gravity Projects/Automation_Hub",
+        "port": 9002
+    }
+]

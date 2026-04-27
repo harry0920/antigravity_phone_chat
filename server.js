@@ -22,6 +22,25 @@ const POLL_INTERVAL = 1000; // 1 second
 const SERVER_PORT = process.env.PORT || 3000;
 const APP_PASSWORD = process.env.APP_PASSWORD || 'antigravity';
 const AUTH_COOKIE_NAME = 'ag_auth_token';
+const WORKSPACES_FILE = join(__dirname, 'workspaces.json');
+
+// Workspace state
+let workspaces = [];
+let currentWorkspaceId = null;
+
+function loadWorkspaces() {
+    try {
+        if (fs.existsSync(WORKSPACES_FILE)) {
+            workspaces = JSON.parse(fs.readFileSync(WORKSPACES_FILE, 'utf8'));
+            if (workspaces.length > 0 && !currentWorkspaceId) {
+                currentWorkspaceId = workspaces[0].id;
+            }
+        }
+    } catch (e) {
+        console.error('❌ Failed to load workspaces:', e.message);
+    }
+}
+loadWorkspaces();
 
 // Security warning for default credentials
 if (APP_PASSWORD === 'antigravity') {
@@ -118,23 +137,25 @@ function getJson(url) {
 
 // Find Antigravity CDP endpoint
 // Find Antigravity CDP endpoint
-async function discoverCDP() {
+async function discoverCDP(preferredPort = null) {
     const errors = [];
-    for (const port of PORTS) {
+    const portsToScan = preferredPort ? [preferredPort, ...PORTS.filter(p => p !== preferredPort)] : PORTS;
+    
+    for (const port of portsToScan) {
         try {
             const list = await getJson(`http://127.0.0.1:${port}/json/list`);
 
             // Priority 1: Standard Workbench (The main window)
             const workbench = list.find(t => t.url?.includes('workbench.html') || (t.title && t.title.includes('workbench')));
             if (workbench && workbench.webSocketDebuggerUrl) {
-                console.log('Found Workbench target:', workbench.title);
+                console.log(`✅ Found Antigravity on port ${port}:`, workbench.title);
                 return { port, url: workbench.webSocketDebuggerUrl };
             }
 
             // Priority 2: Jetski/Launchpad (Fallback)
             const jetski = list.find(t => t.url?.includes('jetski') || t.title === 'Launchpad');
             if (jetski && jetski.webSocketDebuggerUrl) {
-                console.log('Found Jetski/Launchpad target:', jetski.title);
+                console.log(`✅ Found Jetski/Launchpad on port ${port}:`, jetski.title);
                 return { port, url: jetski.webSocketDebuggerUrl };
             }
         } catch (e) {
@@ -2250,6 +2271,13 @@ async function createServer() {
     return { server, wss, app, hasSSL };
 }
 
+async function initCDP() {
+    const workspace = workspaces.find(w => w.id === currentWorkspaceId);
+    const target = await discoverCDP(workspace?.port);
+    cdpConnection = await connectCDP(target.url);
+    cdpConnection.port = target.port;
+}
+
 // Main
 async function main() {
     try {
@@ -2323,6 +2351,46 @@ async function main() {
             if (!cdpConnection) return res.json({ hasChat: false, hasMessages: false, editorFound: false });
             const result = await hasChatOpen(cdpConnection);
             res.json(result);
+        });
+
+        // --- Workspace API ---
+        app.get('/api/workspaces', (req, res) => {
+            res.json({
+                currentWorkspaceId,
+                workspaces: workspaces.map(w => ({
+                    id: w.id,
+                    name: w.name,
+                    path: w.path,
+                    port: w.port,
+                    active: w.id === currentWorkspaceId
+                }))
+            });
+        });
+
+        app.post('/api/switch-workspace', async (req, res) => {
+            const { id } = req.body;
+            const workspace = workspaces.find(w => w.id === id);
+            if (!workspace) return res.status(404).json({ error: 'Workspace not found' });
+
+            console.log(`🔄 Switching to workspace: ${workspace.name} (${id})`);
+            currentWorkspaceId = id;
+
+            // Close existing connection
+            if (cdpConnection?.ws) {
+                cdpConnection.ws.close();
+                cdpConnection = null;
+            }
+
+            // Try to connect to the new one
+            try {
+                const target = await discoverCDP(workspace.port);
+                cdpConnection = await connectCDP(target.url);
+                cdpConnection.port = target.port;
+                res.json({ success: true, message: `Switched to ${workspace.name}` });
+            } catch (err) {
+                console.warn(`⚠️ Workspace ${workspace.name} connection failed: ${err.message}`);
+                res.json({ success: true, warning: 'Workspace selected but Antigravity instance not found. It will connect automatically when started.' });
+            }
         });
 
         // Kill any existing process on the port before starting
