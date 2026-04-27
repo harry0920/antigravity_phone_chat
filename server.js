@@ -489,41 +489,156 @@ async function injectMessage(cdp, text) {
     const safeText = JSON.stringify(text);
 
     const EXPRESSION = `(async () => {
+        const debug = [];
+        
+        // Check if AI is currently generating
         const cancel = document.querySelector('[data-tooltip-id="input-send-button-cancel-tooltip"]');
         if (cancel && cancel.offsetParent !== null) return { ok:false, reason:"busy" };
 
-        const editors = [...document.querySelectorAll('#conversation [contenteditable="true"], #chat [contenteditable="true"], #cascade [contenteditable="true"]')]
+        // === PHASE 1: Find the editor ===
+        // Strategy A: Search inside known containers (original approach)
+        let editors = [...document.querySelectorAll('#conversation [contenteditable="true"], #chat [contenteditable="true"], #cascade [contenteditable="true"]')]
             .filter(el => el.offsetParent !== null);
+        debug.push('A: container editors=' + editors.length);
+
+        // Strategy B: Search for Lexical editors (used by many Electron chat UIs)
+        if (editors.length === 0) {
+            editors = [...document.querySelectorAll('[data-lexical-editor="true"], [data-lexical-editor]')]
+                .filter(el => el.offsetParent !== null);
+            debug.push('B: lexical editors=' + editors.length);
+        }
+
+        // Strategy C: Global contenteditable search (broadest fallback)
+        if (editors.length === 0) {
+            editors = [...document.querySelectorAll('[contenteditable="true"]')]
+                .filter(el => el.offsetParent !== null && el.offsetHeight > 10);
+            debug.push('C: global contenteditable=' + editors.length);
+        }
+
+        // Strategy D: Textarea / input fallback
+        if (editors.length === 0) {
+            editors = [...document.querySelectorAll('textarea, input[type="text"]')]
+                .filter(el => el.offsetParent !== null && (
+                    el.placeholder?.toLowerCase().includes('message') ||
+                    el.placeholder?.toLowerCase().includes('ask') ||
+                    el.placeholder?.toLowerCase().includes('type') ||
+                    el.placeholder?.toLowerCase().includes('chat') ||
+                    el.getAttribute('aria-label')?.toLowerCase().includes('message') ||
+                    el.getAttribute('aria-label')?.toLowerCase().includes('chat')
+                ));
+            debug.push('D: textarea/input=' + editors.length);
+        }
+
+        // Strategy E: Role=textbox (ARIA pattern)
+        if (editors.length === 0) {
+            editors = [...document.querySelectorAll('[role="textbox"]')]
+                .filter(el => el.offsetParent !== null);
+            debug.push('E: role=textbox=' + editors.length);
+        }
+
         const editor = editors.at(-1);
-        if (!editor) return { ok:false, error:"editor_not_found" };
+        if (!editor) {
+            // Collect diagnostic info about the page
+            const allCE = document.querySelectorAll('[contenteditable]');
+            const allTA = document.querySelectorAll('textarea');
+            const allInput = document.querySelectorAll('input');
+            const bodyIds = Array.from(document.body.children).map(c => c.id || c.tagName).filter(Boolean).join(', ');
+            return { 
+                ok:false, 
+                error:"editor_not_found",
+                debug: debug.join(' | '),
+                diagnostics: {
+                    contentEditableCount: allCE.length,
+                    textareaCount: allTA.length,
+                    inputCount: allInput.length,
+                    bodyChildren: bodyIds,
+                    url: window.location?.href?.substring(0, 100) || 'unknown'
+                }
+            };
+        }
+        debug.push('Using editor: tag=' + editor.tagName + ' class=' + (editor.className || '').toString().substring(0, 60));
 
         const textToInsert = ${safeText};
 
-        editor.focus();
-        document.execCommand?.("selectAll", false, null);
-        document.execCommand?.("delete", false, null);
+        // === PHASE 2: Insert text ===
+        const isTextarea = editor.tagName === 'TEXTAREA' || editor.tagName === 'INPUT';
+        
+        if (isTextarea) {
+            // For native form elements
+            const nativeInputValueSetter = Object.getOwnPropertyDescriptor(
+                editor.tagName === 'TEXTAREA' ? window.HTMLTextAreaElement.prototype : window.HTMLInputElement.prototype,
+                'value'
+            ).set;
+            nativeInputValueSetter.call(editor, textToInsert);
+            editor.dispatchEvent(new Event('input', { bubbles: true }));
+            editor.dispatchEvent(new Event('change', { bubbles: true }));
+            debug.push('Inserted via native setter');
+        } else {
+            // For contenteditable elements
+            editor.focus();
+            document.execCommand?.("selectAll", false, null);
+            document.execCommand?.("delete", false, null);
 
-        let inserted = false;
-        try { inserted = !!document.execCommand?.("insertText", false, textToInsert); } catch {}
-        if (!inserted) {
-            editor.textContent = textToInsert;
-            editor.dispatchEvent(new InputEvent("beforeinput", { bubbles:true, inputType:"insertText", data: textToInsert }));
-            editor.dispatchEvent(new InputEvent("input", { bubbles:true, inputType:"insertText", data: textToInsert }));
+            let inserted = false;
+            try { inserted = !!document.execCommand?.("insertText", false, textToInsert); } catch {}
+            if (!inserted) {
+                editor.textContent = textToInsert;
+                editor.dispatchEvent(new InputEvent("beforeinput", { bubbles:true, inputType:"insertText", data: textToInsert }));
+                editor.dispatchEvent(new InputEvent("input", { bubbles:true, inputType:"insertText", data: textToInsert }));
+            }
+            debug.push('Inserted via ' + (inserted ? 'execCommand' : 'textContent fallback'));
         }
 
         await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
 
-        const submit = document.querySelector("svg.lucide-arrow-right")?.closest("button");
-        if (submit && !submit.disabled) {
-            submit.click();
-            return { ok:true, method:"click_submit" };
+        // === PHASE 3: Find and click submit button ===
+        // Strategy 1: Lucide arrow-right SVG (original)
+        let submit = document.querySelector("svg.lucide-arrow-right")?.closest("button");
+        
+        // Strategy 2: Lucide send icon
+        if (!submit) submit = document.querySelector("svg.lucide-send, svg.lucide-arrow-up")?.closest("button");
+        
+        // Strategy 3: data-tooltip-id patterns
+        if (!submit) submit = document.querySelector('[data-tooltip-id*="send"], [data-tooltip-id*="submit"]');
+        
+        // Strategy 4: aria-label patterns  
+        if (!submit) {
+            const allBtns = Array.from(document.querySelectorAll('button'));
+            submit = allBtns.find(b => {
+                const label = (b.getAttribute('aria-label') || '').toLowerCase();
+                const title = (b.getAttribute('title') || '').toLowerCase();
+                return (label.includes('send') || label.includes('submit') || title.includes('send')) && b.offsetParent !== null && !b.disabled;
+            });
+        }
+        
+        // Strategy 5: Button near the editor (sibling or parent's sibling)
+        if (!submit) {
+            let searchScope = editor.parentElement;
+            for (let i = 0; i < 4 && searchScope; i++) {
+                const btns = Array.from(searchScope.querySelectorAll('button')).filter(b => b.offsetParent !== null && !b.disabled);
+                // Find a button that has an SVG icon and is likely a send button
+                const candidate = btns.find(b => b.querySelector('svg') && b !== editor);
+                if (candidate) {
+                    submit = candidate;
+                    break;
+                }
+                searchScope = searchScope.parentElement;
+            }
         }
 
-        // Submit button not found, but text is inserted - trigger Enter key
-        editor.dispatchEvent(new KeyboardEvent("keydown", { bubbles:true, key:"Enter", code:"Enter" }));
-        editor.dispatchEvent(new KeyboardEvent("keyup", { bubbles:true, key:"Enter", code:"Enter" }));
+        if (submit && !submit.disabled) {
+            submit.click();
+            debug.push('Submit: clicked button');
+            return { ok:true, method:"click_submit", debug: debug.join(' | ') };
+        }
+
+        // Fallback: trigger Enter key on the editor
+        debug.push('Submit: Enter key fallback (no button found)');
+        editor.dispatchEvent(new KeyboardEvent("keydown", { bubbles:true, key:"Enter", code:"Enter", keyCode:13 }));
+        editor.dispatchEvent(new KeyboardEvent("keypress", { bubbles:true, key:"Enter", code:"Enter", keyCode:13 }));
+        editor.dispatchEvent(new KeyboardEvent("keyup", { bubbles:true, key:"Enter", code:"Enter", keyCode:13 }));
         
-        return { ok:true, method:"enter_keypress" };
+        return { ok:true, method:"enter_keypress", debug: debug.join(' | ') };
     })()`;
 
     for (const ctx of cdp.contexts) {
@@ -1859,6 +1974,13 @@ async function createServer() {
         }
 
         const result = await injectMessage(cdpConnection, message);
+
+        // Log detailed diagnostics for debugging
+        if (result.ok === false) {
+            console.error('❌ Send failed:', JSON.stringify(result, null, 2));
+        } else {
+            console.log(`✅ Message sent via ${result.method}${result.debug ? ' | ' + result.debug : ''}`);
+        }
 
         // Always return 200 - the message usually goes through even if CDP reports issues
         // The client will refresh and see if the message appeared
