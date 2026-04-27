@@ -1039,9 +1039,13 @@ function openModal(title, options, onSelect) {
     options.forEach(opt => {
         const div = document.createElement('div');
         div.className = 'modal-option';
-        div.textContent = opt;
+        // Handle both string options and {label, value} objects
+        const label = typeof opt === 'object' ? opt.label : opt;
+        const value = typeof opt === 'object' ? opt.value : opt;
+        
+        div.textContent = label;
         div.addEventListener('click', () => {
-            onSelect(opt);
+            onSelect(value);
             closeModal();
         });
         modalList.appendChild(div);
@@ -1106,9 +1110,9 @@ modelBtn.addEventListener('click', () => {
 
 if (workspaceBtn) {
     workspaceBtn.addEventListener('click', () => {
-        const options = workspaces.map(w => w.name);
-        openModal('Select Workspace', options, async (name) => {
-            const workspace = workspaces.find(w => w.name === name);
+        const options = workspaces.map(w => ({ label: w.name, value: w.id }));
+        openModal('Select Workspace', options, async (id) => {
+            const workspace = workspaces.find(w => w.id === id);
             if (!workspace) return;
 
             const prev = workspaceText.textContent;
@@ -1123,11 +1127,23 @@ if (workspaceBtn) {
                 const data = await res.json();
                 
                 if (data.success) {
-                    workspaceText.textContent = workspace.name;
-                    currentWorkspaceId = workspace.id;
-                    // Trigger immediate refresh
-                    loadSnapshot();
-                    fetchAppState();
+                    if (data.isLaunching) {
+                        workspaceText.textContent = '🚀 Launching...';
+                        console.log('[WORKSPACE] Launching project on Mac:', workspace.name);
+                        // Poll more frequently for a few seconds to catch the new instance
+                        let launchChecks = 0;
+                        const checkInt = setInterval(() => {
+                            loadSnapshot();
+                            if (chatIsOpen || launchChecks > 15) clearInterval(checkInt);
+                            launchChecks++;
+                        }, 2000);
+                    } else {
+                        workspaceText.textContent = workspace.name;
+                        currentWorkspaceId = workspace.id;
+                        // Trigger immediate refresh
+                        loadSnapshot();
+                        fetchAppState();
+                    }
                 } else {
                     alert('Error: ' + (data.error || 'Unknown'));
                     workspaceText.textContent = prev;

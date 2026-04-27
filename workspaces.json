@@ -1,20 +1,140 @@
 [
     {
-        "id": "global_phone_connect",
-        "name": "Global Phone Connect",
-        "path": "/Users/harry/Anti Gravity Projects/Global_Phone_Connect",
+        "id": "video_agent_workspace",
+        "name": "📦 Video Agent (Full Workspace)",
+        "path": "/Users/harry/Library/CloudStorage/GoogleDrive-vashisht.hardik@gmail.com/My Drive/Content for DigitalRealEstateDrive/Anti Gravity Projects/hyperframes + Video Agent.code-workspace",
         "port": 9000
     },
     {
-        "id": "my_web_project",
-        "name": "My Web Project",
-        "path": "/Users/harry/Anti Gravity Projects/My_Web_Project",
+        "id": "webquench_workspace",
+        "name": "📦 WebQuench (Full Workspace)",
+        "path": "/Users/harry/Library/CloudStorage/GoogleDrive-vashisht.hardik@gmail.com/My Drive/Content for DigitalRealEstateDrive/Anti Gravity Projects/WebQuench Bundle + SEO.code-workspace",
         "port": 9001
     },
     {
-        "id": "automation_hub",
-        "name": "Automation Hub",
-        "path": "/Users/harry/Anti Gravity Projects/Automation_Hub",
-        "port": 9002
+        "id": "global_phone_connect",
+        "name": "📱 Global Phone Connect",
+        "path": "/Users/harry/Anti Gravity Projects/Global_Phone_Connect",
+        "port": 9003
+    },
+    {
+        "id": "ai_brain",
+        "name": "🧠 AI-Brain",
+        "path": "/Users/harry/Library/CloudStorage/GoogleDrive-vashisht.hardik@gmail.com/My Drive/Content for DigitalRealEstateDrive/Anti Gravity Projects/AI-Brain",
+        "port": 9000
+    },
+    {
+        "id": "custom_concrete",
+        "name": "🏗️ Custom Concrete Texas",
+        "path": "/Users/harry/Library/CloudStorage/GoogleDrive-vashisht.hardik@gmail.com/My Drive/Content for DigitalRealEstateDrive/Anti Gravity Projects/Custom Concrete Texas",
+        "port": 9000
+    },
+    {
+        "id": "finance_gpts",
+        "name": "💰 FinanceGPTs",
+        "path": "/Users/harry/Library/CloudStorage/GoogleDrive-vashisht.hardik@gmail.com/My Drive/Content for DigitalRealEstateDrive/Anti Gravity Projects/FinanceGPTs",
+        "port": 9000
+    },
+    {
+        "id": "google_email_agent",
+        "name": "📧 Google Email Agent",
+        "path": "/Users/harry/Library/CloudStorage/GoogleDrive-vashisht.hardik@gmail.com/My Drive/Content for DigitalRealEstateDrive/Anti Gravity Projects/Google Email Agent",
+        "port": 9000
+    },
+    {
+        "id": "hyperframes_video",
+        "name": "🎬 hyperframes-video-agent",
+        "path": "/Users/harry/Library/CloudStorage/GoogleDrive-vashisht.hardik@gmail.com/My Drive/Content for DigitalRealEstateDrive/Anti Gravity Projects/hyperframes-video-agent",
+        "port": 9000
+    },
+    {
+        "id": "lead_gorrilla",
+        "name": "🦍 Lead Gorrilla Outreach",
+        "path": "/Users/harry/Library/CloudStorage/GoogleDrive-vashisht.hardik@gmail.com/My Drive/Content for DigitalRealEstateDrive/Anti Gravity Projects/Lead Gorrilla Outreach Agent",
+        "port": 9000
+    },
+    {
+        "id": "linkedin_growth",
+        "name": "📈 LinkedIn Growth Agent",
+        "path": "/Users/harry/Library/CloudStorage/GoogleDrive-vashisht.hardik@gmail.com/My Drive/Content for DigitalRealEstateDrive/Anti Gravity Projects/LinkedIn Growth Agent",
+        "port": 9000
+    },
+    {
+        "id": "linkedin_job",
+        "name": "💼 LinkedIn Job Agent",
+        "path": "/Users/harry/Library/CloudStorage/GoogleDrive-vashisht.hardik@gmail.com/My Drive/Content for DigitalRealEstateDrive/Anti Gravity Projects/LinkedIn Job Agent",
+        "port": 9000
+    },
+    {
+        "id": "mortgage_generator",
+        "name": "🏠 Mortgage Offer Generator",
+        "path": "/Users/harry/Library/CloudStorage/GoogleDrive-vashisht.hardik@gmail.com/My Drive/Content for DigitalRealEstateDrive/Anti Gravity Projects/Mortgage Offer Genenrator",
+        "port": 9000
+    },
+    {
+        "id": "mortgage_rates",
+        "name": "📉 Mortgage Rates",
+        "path": "/Users/harry/Library/CloudStorage/GoogleDrive-vashisht.hardik@gmail.com/My Drive/Content for DigitalRealEstateDrive/Anti Gravity Projects/Mortgage Rates",
+        "port": 9000
+    },
+    {
+        "id": "mortgage_crm",
+        "name": "🗄️ MortgageCRM Data",
+        "path": "/Users/harry/Library/CloudStorage/GoogleDrive-vashisht.hardik@gmail.com/My Drive/Content for DigitalRealEstateDrive/Anti Gravity Projects/MortgageCRM Data",
+        "port": 9000
+    },
+    {
+        "id": "pj_website",
+        "name": "🌐 PJ Website",
+        "path": "/Users/harry/Library/CloudStorage/GoogleDrive-vashisht.hardik@gmail.com/My Drive/Content for DigitalRealEstateDrive/Anti Gravity Projects/PJ Website",
+        "port": 9000
+    },
+    {
+        "id": "real_estate_agent",
+        "name": "🏠 Real Estate AI Agent",
+        "path": "/Users/harry/Library/CloudStorage/GoogleDrive-vashisht.hardik@gmail.com/My Drive/Content for DigitalRealEstateDrive/Anti Gravity Projects/Real Estate AI Agent",
+        "port": 9000
+    },
+    {
+        "id": "remote_claude",
+        "name": "☁️ RemoteClaude",
+        "path": "/Users/harry/Library/CloudStorage/GoogleDrive-vashisht.hardik@gmail.com/My Drive/Content for DigitalRealEstateDrive/Anti Gravity Projects/RemoteClaude",
+        "port": 9000
+    },
+    {
+        "id": "seo_mastery",
+        "name": "🔍 SEO Mastery",
+        "path": "/Users/harry/Library/CloudStorage/GoogleDrive-vashisht.hardik@gmail.com/My Drive/Content for DigitalRealEstateDrive/Anti Gravity Projects/SEO Mastery",
+        "port": 9000
+    },
+    {
+        "id": "skills",
+        "name": "🛠️ Skills",
+        "path": "/Users/harry/Library/CloudStorage/GoogleDrive-vashisht.hardik@gmail.com/My Drive/Content for DigitalRealEstateDrive/Anti Gravity Projects/Skills",
+        "port": 9000
+    },
+    {
+        "id": "tera_gilbert",
+        "name": "✨ Tera Gilbert Website",
+        "path": "/Users/harry/Library/CloudStorage/GoogleDrive-vashisht.hardik@gmail.com/My Drive/Content for DigitalRealEstateDrive/Anti Gravity Projects/Tera Gilbert Website",
+        "port": 9000
+    },
+    {
+        "id": "webquench_main",
+        "name": "💧 WebQuench Main Website",
+        "path": "/Users/harry/Library/CloudStorage/GoogleDrive-vashisht.hardik@gmail.com/My Drive/Content for DigitalRealEstateDrive/Anti Gravity Projects/WebQuench Main Website",
+        "port": 9000
+    },
+    {
+        "id": "webquench_repo",
+        "name": "📚 WebQuench Repo Library",
+        "path": "/Users/harry/Library/CloudStorage/GoogleDrive-vashisht.hardik@gmail.com/My Drive/Content for DigitalRealEstateDrive/Anti Gravity Projects/WebQuench Repo Library",
+        "port": 9000
+    },
+    {
+        "id": "webquench_saas",
+        "name": "🚀 WebQuenchSAAS",
+        "path": "/Users/harry/Library/CloudStorage/GoogleDrive-vashisht.hardik@gmail.com/My Drive/Content for DigitalRealEstateDrive/Anti Gravity Projects/WebQuenchSAAS",
+        "port": 9000
     }
 ]

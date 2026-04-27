@@ -12,7 +12,7 @@ import WebSocket from 'ws';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import { inspectUI } from './ui_inspector.js';
-import { execSync } from 'child_process';
+import { execSync, exec } from 'child_process';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -137,15 +137,33 @@ function getJson(url) {
 
 // Find Antigravity CDP endpoint
 // Find Antigravity CDP endpoint
-async function discoverCDP(preferredPort = null) {
+async function discoverCDP(preferredPort = null, strict = false, targetPath = null) {
     const errors = [];
-    const portsToScan = preferredPort ? [preferredPort, ...PORTS.filter(p => p !== preferredPort)] : PORTS;
+    const portsToScan = preferredPort ? 
+        (strict ? [preferredPort] : [preferredPort, ...PORTS.filter(p => p !== preferredPort)]) 
+        : PORTS;
     
+    // Extract folder name from path for matching
+    const folderName = targetPath ? targetPath.split(/[\\/]/).pop().replace('.code-workspace', '') : null;
+
     for (const port of portsToScan) {
         try {
             const list = await getJson(`http://127.0.0.1:${port}/json/list`);
 
-            // Priority 1: Standard Workbench (The main window)
+            // If we have a target path, try to find a specific match in titles
+            if (folderName) {
+                const match = list.find(t => 
+                    t.url?.includes('workbench.html') && 
+                    (t.title?.toLowerCase().includes(folderName.toLowerCase()) || 
+                     t.title?.toLowerCase().includes(folderName.replace(/_/g, ' ').toLowerCase()))
+                );
+                if (match && match.webSocketDebuggerUrl) {
+                    console.log(`✅ Found specific match for "${folderName}" on port ${port}:`, match.title);
+                    return { port, url: match.webSocketDebuggerUrl };
+                }
+            }
+
+            // Fallback: Priority 1: Standard Workbench (The main window)
             const workbench = list.find(t => t.url?.includes('workbench.html') || (t.title && t.title.includes('workbench')));
             if (workbench && workbench.webSocketDebuggerUrl) {
                 console.log(`✅ Found Antigravity on port ${port}:`, workbench.title);
@@ -1707,11 +1725,13 @@ function isLocalRequest(req) {
 // Initialize CDP connection
 async function initCDP() {
     console.log('🔍 Discovering Antigravity CDP endpoint...');
-    const cdpInfo = await discoverCDP();
-    console.log(`✅ Found Antigravity on port ${cdpInfo.port} `);
+    const workspace = workspaces.find(w => w.id === currentWorkspaceId);
+    const target = await discoverCDP(workspace?.port, false, workspace?.path);
+    console.log(`✅ Found Antigravity on port ${target.port} `);
 
     console.log('🔌 Connecting to CDP...');
-    cdpConnection = await connectCDP(cdpInfo.url);
+    cdpConnection = await connectCDP(target.url);
+    cdpConnection.port = target.port;
     console.log(`✅ Connected! Found ${cdpConnection.contexts.length} execution contexts\n`);
 }
 
@@ -2271,12 +2291,7 @@ async function createServer() {
     return { server, wss, app, hasSSL };
 }
 
-async function initCDP() {
-    const workspace = workspaces.find(w => w.id === currentWorkspaceId);
-    const target = await discoverCDP(workspace?.port);
-    cdpConnection = await connectCDP(target.url);
-    cdpConnection.port = target.port;
-}
+
 
 // Main
 async function main() {
@@ -2381,15 +2396,33 @@ async function main() {
                 cdpConnection = null;
             }
 
-            // Try to connect to the new one
+            // Try to connect to the new one (Strictly on the workspace port)
             try {
-                const target = await discoverCDP(workspace.port);
+                // Pass targetPath to find the specific window
+                const target = await discoverCDP(workspace.port, true, workspace.path);
                 cdpConnection = await connectCDP(target.url);
                 cdpConnection.port = target.port;
-                res.json({ success: true, message: `Switched to ${workspace.name}` });
+                res.json({ success: true, message: `Connected to ${workspace.name}` });
             } catch (err) {
-                console.warn(`⚠️ Workspace ${workspace.name} connection failed: ${err.message}`);
-                res.json({ success: true, warning: 'Workspace selected but Antigravity instance not found. It will connect automatically when started.' });
+                console.log(`🚀 Workspace ${workspace.name} not detected on port ${workspace.port}. Attempting to launch...`);
+                
+                // --- REMOTE LAUNCH LOGIC (macOS) ---
+                // Use 'open -n -a Antigravity' to ensure a new instance is spawned if possible
+                const launchCmd = `open -n -a Antigravity --args --remote-debugging-port=${workspace.port} "${workspace.path}"`;
+                
+                exec(launchCmd, (launchErr) => {
+                    if (launchErr) {
+                        console.error(`❌ Launch failed for ${workspace.name}:`, launchErr.message);
+                    } else {
+                        console.log(`✅ Launch command sent for ${workspace.name}`);
+                    }
+                });
+
+                res.json({ 
+                    success: true, 
+                    warning: `Launching ${workspace.name} on your Mac...`,
+                    isLaunching: true 
+                });
             }
         });
 
