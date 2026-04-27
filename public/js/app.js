@@ -43,12 +43,26 @@ let idleTimer = null;
 let lastHash = '';
 let currentMode = 'Fast';
 let chatIsOpen = true; // Track if a chat is currently open
+let activePort = 9000;
 let workspaces = [];
 let currentWorkspaceId = null;
 
 
 // --- Auth Utilities ---
 async function fetchWithAuth(url, options = {}) {
+    // Append port to GET requests
+    if (!options.method || options.method === 'GET') {
+        const separator = url.includes('?') ? '&' : '?';
+        url += `${separator}port=${activePort}`;
+    } else if (options.method === 'POST') {
+        // Add port to POST body
+        try {
+            const body = JSON.parse(options.body || '{}');
+            body.port = activePort;
+            options.body = JSON.stringify(body);
+        } catch (e) {}
+    }
+
     // Add ngrok skip warning header to all requests
     if (!options.headers) options.headers = {};
     options.headers['ngrok-skip-browser-warning'] = 'true';
@@ -1140,8 +1154,16 @@ if (workspaceBtn) {
                     } else {
                         workspaceText.textContent = workspace.name;
                         currentWorkspaceId = workspace.id;
-                        // Trigger immediate refresh
-                        loadSnapshot();
+                        activePort = workspace.port;
+                        
+                        // FORCE clear old state
+                        lastHash = '';
+                        chatContent.innerHTML = '<div class="loading-state"><div class="loading-spinner"></div><div>Connecting to project...</div></div>';
+                        
+                        // Trigger immediate refresh and follow up to catch auto-resume
+                        setTimeout(loadSnapshot, 100);
+                        setTimeout(loadSnapshot, 1000);
+                        setTimeout(loadSnapshot, 3000);
                         fetchAppState();
                     }
                 } else {

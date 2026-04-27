@@ -3,6 +3,7 @@ import 'dotenv/config';
 import express from 'express';
 import compression from 'compression';
 import cookieParser from 'cookie-parser';
+import cookie from 'cookie';
 import { WebSocketServer } from 'ws';
 import http from 'http';
 import https from 'https';
@@ -26,7 +27,7 @@ const WORKSPACES_FILE = join(__dirname, 'workspaces.json');
 
 // Workspace state
 let workspaces = [];
-let currentWorkspaceId = null;
+let cdpConnections = new Map(); // Map<port, connection>
 
 function loadWorkspaces() {
     try {
@@ -53,7 +54,6 @@ let AUTH_TOKEN = 'ag_default_token';
 
 
 // Shared CDP connection
-let cdpConnection = null;
 let lastSnapshot = null;
 let lastSnapshotHash = null;
 
@@ -135,53 +135,65 @@ function getJson(url) {
     });
 }
 
-// Find Antigravity CDP endpoint
-// Find Antigravity CDP endpoint
-async function discoverCDP(preferredPort = null, strict = false, targetPath = null) {
+// Find Antigravity CDP endpoint for a specific port or list of ports
+async function discoverCDP(targetPort = null, targetPath = null) {
     const errors = [];
-    const portsToScan = preferredPort ? 
-        (strict ? [preferredPort] : [preferredPort, ...PORTS.filter(p => p !== preferredPort)]) 
-        : PORTS;
+    const portsToScan = targetPort ? [targetPort] : PORTS;
     
-    // Extract folder name from path for matching
     const folderName = targetPath ? targetPath.split(/[\\/]/).pop().replace('.code-workspace', '') : null;
 
     for (const port of portsToScan) {
         try {
             const list = await getJson(`http://127.0.0.1:${port}/json/list`);
 
-            // If we have a target path, try to find a specific match in titles
             if (folderName) {
-                const match = list.find(t => 
-                    t.url?.includes('workbench.html') && 
-                    (t.title?.toLowerCase().includes(folderName.toLowerCase()) || 
-                     t.title?.toLowerCase().includes(folderName.replace(/_/g, ' ').toLowerCase()))
-                );
+                const searchName = folderName.toLowerCase();
+                const searchNameNoPlus = searchName.replace(/\s?\+\s?/g, ' ').trim();
+                const searchNameUnderscore = searchName.replace(/\s+/g, '_');
+
+                const match = list.find(t => {
+                    if (!t.url?.includes('workbench.html')) return false;
+                    const title = t.title?.toLowerCase() || '';
+                    return title.includes(searchName) || 
+                           title.includes(searchNameNoPlus) || 
+                           title.includes(searchNameUnderscore);
+                });
+
                 if (match && match.webSocketDebuggerUrl) {
-                    console.log(`✅ Found specific match for "${folderName}" on port ${port}:`, match.title);
-                    return { port, url: match.webSocketDebuggerUrl };
+                    return { port, url: match.webSocketDebuggerUrl, title: match.title };
                 }
             }
 
-            // Fallback: Priority 1: Standard Workbench (The main window)
-            const workbench = list.find(t => t.url?.includes('workbench.html') || (t.title && t.title.includes('workbench')));
+            const workbench = list.find(t => t.url?.includes('workbench.html'));
             if (workbench && workbench.webSocketDebuggerUrl) {
-                console.log(`✅ Found Antigravity on port ${port}:`, workbench.title);
-                return { port, url: workbench.webSocketDebuggerUrl };
-            }
-
-            // Priority 2: Jetski/Launchpad (Fallback)
-            const jetski = list.find(t => t.url?.includes('jetski') || t.title === 'Launchpad');
-            if (jetski && jetski.webSocketDebuggerUrl) {
-                console.log(`✅ Found Jetski/Launchpad on port ${port}:`, jetski.title);
-                return { port, url: jetski.webSocketDebuggerUrl };
+                return { port, url: workbench.webSocketDebuggerUrl, title: workbench.title };
             }
         } catch (e) {
             errors.push(`${port}: ${e.message}`);
         }
     }
-    const errorSummary = errors.length ? `Errors: ${errors.join(', ')}` : 'No ports responding';
-    throw new Error(`CDP not found. ${errorSummary}`);
+    throw new Error(`CDP not found. ${errors.join(', ')}`);
+}
+
+// Get or create connection for a port
+async function getConnection(port, targetPath = null) {
+    let conn = cdpConnections.get(Number(port));
+    if (conn && conn.ws && conn.ws.readyState === WebSocket.OPEN) {
+        return conn;
+    }
+
+    // Try to discover and connect
+    try {
+        const target = await discoverCDP(port, targetPath);
+        console.log(`🔌 Connecting to Antigravity on port ${port}...`);
+        const newConn = await connectCDP(target.url);
+        newConn.port = port;
+        newConn.title = target.title;
+        cdpConnections.set(Number(port), newConn);
+        return newConn;
+    } catch (err) {
+        return null;
+    }
 }
 
 // Connect to CDP
@@ -1722,94 +1734,23 @@ function isLocalRequest(req) {
         ip.startsWith('::ffff:10.');
 }
 
-// Initialize CDP connection
-async function initCDP() {
-    console.log('🔍 Discovering Antigravity CDP endpoint...');
-    const workspace = workspaces.find(w => w.id === currentWorkspaceId);
-    const target = await discoverCDP(workspace?.port, false, workspace?.path);
-    console.log(`✅ Found Antigravity on port ${target.port} `);
 
-    console.log('🔌 Connecting to CDP...');
-    cdpConnection = await connectCDP(target.url);
-    cdpConnection.port = target.port;
-    console.log(`✅ Connected! Found ${cdpConnection.contexts.length} execution contexts\n`);
+
+// Auto-resume the latest chat if none is open
+async function autoResumeChat(cdp) {
+    try {
+        const history = await getChatHistory(cdp);
+        if (history && history.chats && history.chats.length > 0) {
+            const latest = history.chats[0].title;
+            await selectChat(cdp, latest);
+            return true;
+        }
+    } catch (err) {}
+    return false;
 }
 
-// Background polling
-async function startPolling(wss) {
-    let lastErrorLog = 0;
-    let isConnecting = false;
 
-    const poll = async () => {
-        if (!cdpConnection || (cdpConnection.ws && cdpConnection.ws.readyState !== WebSocket.OPEN)) {
-            if (!isConnecting) {
-                console.log('🔍 Looking for Antigravity CDP connection...');
-                isConnecting = true;
-            }
-            if (cdpConnection) {
-                // Was connected, now lost
-                console.log('🔄 CDP connection lost. Attempting to reconnect...');
-                cdpConnection = null;
-            }
-            try {
-                await initCDP();
-                if (cdpConnection) {
-                    console.log('✅ CDP Connection established from polling loop');
-                    isConnecting = false;
-                }
-            } catch (err) {
-                // Not found yet, just wait for next cycle
-            }
-            setTimeout(poll, 2000); // Try again in 2 seconds if not found
-            return;
-        }
 
-        try {
-            const snapshot = await captureSnapshot(cdpConnection);
-            if (snapshot && !snapshot.error) {
-                const hash = hashString(snapshot.html);
-
-                // Only update if content changed
-                if (hash !== lastSnapshotHash) {
-                    lastSnapshot = snapshot;
-                    lastSnapshotHash = hash;
-
-                    // Broadcast to all connected clients
-                    wss.clients.forEach(client => {
-                        if (client.readyState === WebSocket.OPEN) {
-                            client.send(JSON.stringify({
-                                type: 'snapshot_update',
-                                timestamp: new Date().toISOString()
-                            }));
-                        }
-                    });
-
-                    console.log(`📸 Snapshot updated(hash: ${hash})`);
-                }
-            } else {
-                // Snapshot is null or has error
-                const now = Date.now();
-                if (!lastErrorLog || now - lastErrorLog > 10000) {
-                    const errorMsg = snapshot?.error || 'No valid snapshot captured (check contexts)';
-                    console.warn(`⚠️  Snapshot capture issue: ${errorMsg} `);
-                    if (errorMsg.includes('container not found')) {
-                        console.log('   (Tip: Ensure an active chat is open in Antigravity)');
-                    }
-                    if (cdpConnection.contexts.length === 0) {
-                        console.log('   (Tip: No active execution contexts found. Try interacting with the Antigravity window)');
-                    }
-                    lastErrorLog = now;
-                }
-            }
-        } catch (err) {
-            console.error('Poll error:', err.message);
-        }
-
-        setTimeout(poll, POLL_INTERVAL);
-    };
-
-    poll();
-}
 
 // Create Express app
 async function createServer() {
@@ -1918,549 +1859,125 @@ async function createServer() {
         res.json({ success: true });
     });
 
-    // Get current snapshot
-    app.get('/snapshot', (req, res) => {
-        if (!lastSnapshot) {
-            return res.status(503).json({ error: 'No snapshot available yet' });
-        }
-        res.setHeader('Content-Type', 'application/json; charset=utf-8');
-        res.json(lastSnapshot);
-    });
 
-    // Health check endpoint
-    app.get('/health', (req, res) => {
-        res.json({
-            status: 'ok',
-            cdpConnected: cdpConnection?.ws?.readyState === 1, // WebSocket.OPEN = 1
-            uptime: process.uptime(),
-            timestamp: new Date().toISOString(),
-            https: hasSSL
-        });
-    });
+    // --- Modern Stateless Endpoints ---
 
-    // SSL status endpoint
-    app.get('/ssl-status', (req, res) => {
-        const keyPath = join(__dirname, 'certs', 'server.key');
-        const certPath = join(__dirname, 'certs', 'server.cert');
-        const certsExist = fs.existsSync(keyPath) && fs.existsSync(certPath);
-        res.json({
-            enabled: hasSSL,
-            certsExist: certsExist,
-            message: hasSSL ? 'HTTPS is active' :
-                certsExist ? 'Certificates exist, restart server to enable HTTPS' :
-                    'No certificates found'
-        });
-    });
-
-    // Generate SSL certificates endpoint
-    app.post('/generate-ssl', async (req, res) => {
+    // Get current snapshot for a specific port
+    app.get('/snapshot', async (req, res) => {
+        const port = req.query.port || 9000;
+        const cdp = await getConnection(port);
+        if (!cdp) return res.status(503).json({ error: 'CDP disconnected' });
         try {
-            const { execSync } = await import('child_process');
-            execSync('node generate_ssl.js', { cwd: __dirname, stdio: 'pipe' });
-            res.json({
-                success: true,
-                message: 'SSL certificates generated! Restart the server to enable HTTPS.'
-            });
-        } catch (e) {
-            res.status(500).json({
-                success: false,
-                error: e.message
-            });
+            const snapshot = await captureSnapshot(cdp);
+            res.json(snapshot);
+        } catch (err) {
+            res.status(500).json({ error: err.message });
         }
     });
 
-    // Debug UI Endpoint
-    app.get('/debug-ui', async (req, res) => {
-        if (!cdpConnection) return res.status(503).json({ error: 'CDP not connected' });
-        const uiTree = await inspectUI(cdpConnection);
-        console.log('--- UI TREE ---');
-        console.log(uiTree);
-        console.log('---------------');
-        res.type('json').send(uiTree);
-    });
-
-    // Set Mode
-    app.post('/set-mode', async (req, res) => {
-        const { mode } = req.body;
-        if (!cdpConnection) return res.status(503).json({ error: 'CDP disconnected' });
-        const result = await setMode(cdpConnection, mode);
-        res.json(result);
-    });
-
-    // Set Model
-    app.post('/set-model', async (req, res) => {
-        const { model } = req.body;
-        if (!cdpConnection) return res.status(503).json({ error: 'CDP disconnected' });
-        const result = await setModel(cdpConnection, model);
-        res.json(result);
-    });
-
-    // Stop Generation
-    app.post('/stop', async (req, res) => {
-        if (!cdpConnection) return res.status(503).json({ error: 'CDP disconnected' });
-        const result = await stopGeneration(cdpConnection);
-        res.json(result);
-    });
-
-    // Send message
-    app.post('/send', async (req, res) => {
-        const { message } = req.body;
-
-        if (!message) {
-            return res.status(400).json({ error: 'Message required' });
+    // Send a message to a specific port
+    app.post('/message', async (req, res) => {
+        const { message, port } = req.body;
+        if (!message) return res.status(400).json({ error: 'Message required' });
+        const cdp = await getConnection(port || 9000);
+        if (!cdp) return res.status(503).json({ error: 'CDP disconnected' });
+        try {
+            const result = await sendMessage(cdp, message);
+            res.json(result);
+        } catch (err) {
+            res.status(500).json({ error: err.message });
         }
+    });
 
-        if (!cdpConnection) {
-            return res.status(503).json({ error: 'CDP not connected' });
-        }
+    // App State (Model, Mode)
+    app.get('/app-state', async (req, res) => {
+        const port = req.query.port || 9000;
+        const cdp = await getConnection(port);
+        if (!cdp) return res.json({ mode: 'Unknown', model: 'Unknown' });
+        const result = await getAppState(cdp);
+        res.json(result);
+    });
 
-        const result = await injectMessage(cdpConnection, message);
+    // Chat History
+    app.get('/chat-history', async (req, res) => {
+        const port = req.query.port || 9000;
+        const cdp = await getConnection(port);
+        if (!cdp) return res.json({ error: 'CDP disconnected', chats: [] });
+        const result = await getChatHistory(cdp);
+        res.json(result);
+    });
 
-        // Log detailed diagnostics for debugging
-        if (result.ok === false) {
-            console.error('❌ Send failed:', JSON.stringify(result, null, 2));
+    // Select Chat
+    app.post('/select-chat', async (req, res) => {
+        const { title, port } = req.body;
+        const cdp = await getConnection(port || 9000);
+        if (!cdp) return res.status(503).json({ error: 'CDP disconnected' });
+        const result = await selectChat(cdp, title);
+        res.json(result);
+    });
+
+    // New Chat
+    app.post('/new-chat', async (req, res) => {
+        const { port } = req.body;
+        const cdp = await getConnection(port || 9000);
+        if (!cdp) return res.status(503).json({ error: 'CDP disconnected' });
+        const result = await startNewChat(cdp);
+        res.json(result);
+    });
+
+    // Workspace API
+    app.get('/api/workspaces', (req, res) => {
+        res.json({ workspaces });
+    });
+
+    app.post('/api/switch-workspace', async (req, res) => {
+        const { id } = req.body;
+        const workspace = workspaces.find(w => w.id === id);
+        if (!workspace) return res.status(404).json({ error: 'Workspace not found' });
+
+        const cdp = await getConnection(workspace.port, workspace.path);
+        if (cdp) {
+            // Auto-resume if empty
+            const status = await hasChatOpen(cdp);
+            if (!status.hasChat) await autoResumeChat(cdp);
+            res.json({ success: true, message: `Connected to ${workspace.name}` });
         } else {
-            console.log(`✅ Message sent via ${result.method}${result.debug ? ' | ' + result.debug : ''}`);
-        }
-
-        // Always return 200 - the message usually goes through even if CDP reports issues
-        // The client will refresh and see if the message appeared
-        res.json({
-            success: result.ok !== false,
-            method: result.method || 'attempted',
-            details: result
-        });
-    });
-
-    // UI Inspection endpoint - Returns all buttons as JSON for debugging
-    app.get('/ui-inspect', async (req, res) => {
-        if (!cdpConnection) return res.status(503).json({ error: 'CDP disconnected' });
-
-        const EXP = `(() => {
-    try {
-        // Safeguard for non-DOM contexts
-        if (typeof window === 'undefined' || typeof document === 'undefined') {
-            return { error: 'Non-DOM context' };
-        }
-
-        // Helper to get string class name safely (handles SVGAnimatedString)
-        function getCls(el) {
-            if (!el) return '';
-            if (typeof el.className === 'string') return el.className;
-            if (el.className && typeof el.className.baseVal === 'string') return el.className.baseVal;
-            return '';
-        }
-
-        // Helper to pierce Shadow DOM
-        function findAllElements(selector, root = document) {
-            let results = Array.from(root.querySelectorAll(selector));
-            const elements = root.querySelectorAll('*');
-            for (const el of elements) {
-                try {
-                    if (el.shadowRoot) {
-                        results = results.concat(Array.from(el.shadowRoot.querySelectorAll(selector)));
-                    }
-                } catch (e) { }
-            }
-            return results;
-        }
-
-        // Get standard info
-        const url = window.location ? window.location.href : '';
-        const title = document.title || '';
-        const bodyLen = document.body ? document.body.innerHTML.length : 0;
-        const hasCascade = !!document.getElementById('cascade') || !!document.querySelector('.cascade');
-
-        // Scan for buttons
-        const allLucideElements = findAllElements('svg[class*="lucide"]').map(svg => {
-            const parent = svg.closest('button, [role="button"], div, span, a');
-            if (!parent || parent.offsetParent === null) return null;
-            const rect = parent.getBoundingClientRect();
-            return {
-                type: 'lucide-icon',
-                tag: parent.tagName.toLowerCase(),
-                x: Math.round(rect.left),
-                y: Math.round(rect.top),
-                svgClasses: getCls(svg),
-                className: getCls(parent).substring(0, 100),
-                ariaLabel: parent.getAttribute('aria-label') || '',
-                title: parent.getAttribute('title') || '',
-                parentText: (parent.innerText || '').trim().substring(0, 50)
-            };
-        }).filter(Boolean);
-
-        const buttons = findAllElements('button, [role="button"]').map((btn, i) => {
-            const rect = btn.getBoundingClientRect();
-            const svg = btn.querySelector('svg');
-
-            return {
-                type: 'button',
-                index: i,
-                x: Math.round(rect.left),
-                y: Math.round(rect.top),
-                text: (btn.innerText || '').trim().substring(0, 50) || '(empty)',
-                ariaLabel: btn.getAttribute('aria-label') || '',
-                title: btn.getAttribute('title') || '',
-                svgClasses: getCls(svg),
-                className: getCls(btn).substring(0, 100),
-                visible: btn.offsetParent !== null
-            };
-        }).filter(b => b.visible);
-
-        return {
-            url, title, bodyLen, hasCascade,
-            buttons, lucideIcons: allLucideElements
-        };
-    } catch (err) {
-        return { error: err.toString(), stack: err.stack };
-    }
-})()`;
-
-        try {
-            // 1. Get Frames
-            const { frameTree } = await cdpConnection.call("Page.getFrameTree");
-            function flattenFrames(node) {
-                let list = [{
-                    id: node.frame.id,
-                    url: node.frame.url,
-                    name: node.frame.name,
-                    parentId: node.frame.parentId
-                }];
-                if (node.childFrames) {
-                    for (const child of node.childFrames) list = list.concat(flattenFrames(child));
-                }
-                return list;
-            }
-            const allFrames = flattenFrames(frameTree);
-
-            // 2. Map Contexts
-            const contexts = cdpConnection.contexts.map(c => ({
-                id: c.id,
-                name: c.name,
-                origin: c.origin,
-                frameId: c.auxData ? c.auxData.frameId : null,
-                isDefault: c.auxData ? c.auxData.isDefault : false
-            }));
-
-            // 3. Scan ALL Contexts
-            const contextResults = [];
-            for (const ctx of contexts) {
-                try {
-                    const result = await cdpConnection.call("Runtime.evaluate", {
-                        expression: EXP,
-                        returnByValue: true,
-                        contextId: ctx.id
-                    });
-
-                    if (result.result?.value) {
-                        const val = result.result.value;
-                        contextResults.push({
-                            contextId: ctx.id,
-                            frameId: ctx.frameId,
-                            url: val.url,
-                            title: val.title,
-                            hasCascade: val.hasCascade,
-                            buttonCount: val.buttons.length,
-                            lucideCount: val.lucideIcons.length,
-                            buttons: val.buttons, // Store buttons for analysis
-                            lucideIcons: val.lucideIcons
-                        });
-                    } else if (result.exceptionDetails) {
-                        contextResults.push({
-                            contextId: ctx.id,
-                            frameId: ctx.frameId,
-                            error: `Script Exception: ${result.exceptionDetails.text} ${result.exceptionDetails.exception?.description || ''} `
-                        });
-                    } else {
-                        contextResults.push({
-                            contextId: ctx.id,
-                            frameId: ctx.frameId,
-                            error: 'No value returned (undefined)'
-                        });
-                    }
-                } catch (e) {
-                    contextResults.push({ contextId: ctx.id, error: e.message });
-                }
-            }
-
-            // 4. Match and Analyze
-            const cascadeFrame = allFrames.find(f => f.url.includes('cascade'));
-            const matchingContext = contextResults.find(c => c.frameId === cascadeFrame?.id);
-            const contentContext = contextResults.sort((a, b) => (b.buttonCount || 0) - (a.buttonCount || 0))[0];
-
-            // Prepare "useful buttons" from the best context
-            const bestContext = matchingContext || contentContext;
-            const usefulButtons = bestContext ? (bestContext.buttons || []).filter(b =>
-                b.ariaLabel?.includes('New Conversation') ||
-                b.title?.includes('New Conversation') ||
-                b.ariaLabel?.includes('Past Conversations') ||
-                b.title?.includes('Past Conversations') ||
-                b.ariaLabel?.includes('History')
-            ) : [];
-
-            res.json({
-                summary: {
-                    frameFound: !!cascadeFrame,
-                    cascadeFrameId: cascadeFrame?.id,
-                    contextFound: !!matchingContext,
-                    bestContextId: bestContext?.contextId
-                },
-                frames: allFrames,
-                contexts: contexts,
-                scanResults: contextResults.map(c => ({
-                    id: c.contextId,
-                    frameId: c.frameId,
-                    url: c.url,
-                    hasCascade: c.hasCascade,
-                    buttons: c.buttonCount,
-                    error: c.error
-                })),
-                usefulButtons: usefulButtons,
-                bestContextData: bestContext // Full data for the best context
-            });
-
-        } catch (e) {
-            res.status(500).json({ error: e.message, stack: e.stack });
+            const launchCmd = `open -n -a Antigravity --args --remote-debugging-port=${workspace.port} "${workspace.path}"`;
+            exec(launchCmd, () => {});
+            res.json({ success: true, isLaunching: true });
         }
     });
 
-    // Endpoint to list all CDP targets - helpful for debugging connection issues
-    app.get('/cdp-targets', async (req, res) => {
-        const results = {};
-        for (const port of PORTS) {
-            try {
-                const list = await getJson(`http://127.0.0.1:${port}/json/list`);
-                results[port] = list;
-            } catch (e) {
-                results[port] = e.message;
-            }
-        }
-        res.json(results);
-    });
-
-    // WebSocket connection with Auth check
+    // --- WebSocket ---
     wss.on('connection', (ws, req) => {
-        // Parse cookies from headers
-        const rawCookies = req.headers.cookie || '';
-        const parsedCookies = {};
-        rawCookies.split(';').forEach(c => {
-            const [k, v] = c.trim().split('=');
-            if (k && v) {
-                try {
-                    parsedCookies[k] = decodeURIComponent(v);
-                } catch (e) {
-                    parsedCookies[k] = v;
-                }
-            }
-        });
-
-        // Verify signed cookie manually
+        const parsedCookies = cookie.parse(req.headers.cookie || '');
         const signedToken = parsedCookies[AUTH_COOKIE_NAME];
-        let isAuthenticated = false;
+        let isAuthenticated = isLocalRequest(req);
 
-        // Exempt local Wi-Fi devices from authentication
-        if (isLocalRequest(req)) {
-            isAuthenticated = true;
-        } else if (signedToken) {
+        if (!isAuthenticated && signedToken) {
             const sessionSecret = process.env.SESSION_SECRET || 'antigravity_secret_key_1337';
-
-            if (sessionSecret === 'antigravity_secret_key_1337') {
-                // Warning already printed on startup, but we check here for token verification
-            }
-
             const token = cookieParser.signedCookie(signedToken, sessionSecret);
-            if (token === AUTH_TOKEN) {
-                isAuthenticated = true;
-            }
+            if (token === AUTH_TOKEN) isAuthenticated = true;
         }
 
         if (!isAuthenticated) {
-            console.log('🚫 Unauthorized WebSocket connection attempt');
-            ws.send(JSON.stringify({ type: 'error', message: 'Unauthorized' }));
-            setTimeout(() => ws.close(), 100);
+            ws.close();
             return;
         }
-
-        console.log('📱 Client connected (Authenticated)');
-
-        ws.on('close', () => {
-            console.log('📱 Client disconnected');
-        });
     });
 
     return { server, wss, app, hasSSL };
 }
 
-
-
-// Main
 async function main() {
     try {
-        await initCDP();
-    } catch (err) {
-        console.warn(`⚠️  Initial CDP discovery failed: ${err.message}`);
-        console.log('💡 Start Antigravity with --remote-debugging-port=9000 to connect.');
-    }
-
-    try {
         const { server, wss, app, hasSSL } = await createServer();
-
-        // Start background polling (it will now handle reconnections)
-        startPolling(wss);
-
-        // Remote Click
-        app.post('/remote-click', async (req, res) => {
-            const { selector, index, textContent } = req.body;
-            if (!cdpConnection) return res.status(503).json({ error: 'CDP disconnected' });
-            const result = await clickElement(cdpConnection, { selector, index, textContent });
-            res.json(result);
-        });
-
-        // Remote Scroll - sync phone scroll to desktop
-        app.post('/remote-scroll', async (req, res) => {
-            const { scrollTop, scrollPercent } = req.body;
-            if (!cdpConnection) return res.status(503).json({ error: 'CDP disconnected' });
-            const result = await remoteScroll(cdpConnection, { scrollTop, scrollPercent });
-            res.json(result);
-        });
-
-        // Get App State
-        app.get('/app-state', async (req, res) => {
-            if (!cdpConnection) return res.json({ mode: 'Unknown', model: 'Unknown' });
-            const result = await getAppState(cdpConnection);
-            res.json(result);
-        });
-
-        // Start New Chat
-        app.post('/new-chat', async (req, res) => {
-            if (!cdpConnection) return res.status(503).json({ error: 'CDP disconnected' });
-            const result = await startNewChat(cdpConnection);
-            res.json(result);
-        });
-
-        // Get Chat History
-        app.get('/chat-history', async (req, res) => {
-            if (!cdpConnection) return res.json({ error: 'CDP disconnected', chats: [] });
-            const result = await getChatHistory(cdpConnection);
-            res.json(result);
-        });
-
-        // Select a Chat
-        app.post('/select-chat', async (req, res) => {
-            const { title } = req.body;
-            if (!title) return res.status(400).json({ error: 'Chat title required' });
-            if (!cdpConnection) return res.status(503).json({ error: 'CDP disconnected' });
-            const result = await selectChat(cdpConnection, title);
-            res.json(result);
-        });
-
-        // Close Chat History
-        app.post('/close-history', async (req, res) => {
-            if (!cdpConnection) return res.status(503).json({ error: 'CDP disconnected' });
-            const result = await closeHistory(cdpConnection);
-            res.json(result);
-        });
-
-        // Check if Chat is Open
-        app.get('/chat-status', async (req, res) => {
-            if (!cdpConnection) return res.json({ hasChat: false, hasMessages: false, editorFound: false });
-            const result = await hasChatOpen(cdpConnection);
-            res.json(result);
-        });
-
-        // --- Workspace API ---
-        app.get('/api/workspaces', (req, res) => {
-            res.json({
-                currentWorkspaceId,
-                workspaces: workspaces.map(w => ({
-                    id: w.id,
-                    name: w.name,
-                    path: w.path,
-                    port: w.port,
-                    active: w.id === currentWorkspaceId
-                }))
-            });
-        });
-
-        app.post('/api/switch-workspace', async (req, res) => {
-            const { id } = req.body;
-            const workspace = workspaces.find(w => w.id === id);
-            if (!workspace) return res.status(404).json({ error: 'Workspace not found' });
-
-            console.log(`🔄 Switching to workspace: ${workspace.name} (${id})`);
-            currentWorkspaceId = id;
-
-            // Close existing connection
-            if (cdpConnection?.ws) {
-                cdpConnection.ws.close();
-                cdpConnection = null;
-            }
-
-            // Try to connect to the new one (Strictly on the workspace port)
-            try {
-                // Pass targetPath to find the specific window
-                const target = await discoverCDP(workspace.port, true, workspace.path);
-                cdpConnection = await connectCDP(target.url);
-                cdpConnection.port = target.port;
-                res.json({ success: true, message: `Connected to ${workspace.name}` });
-            } catch (err) {
-                console.log(`🚀 Workspace ${workspace.name} not detected on port ${workspace.port}. Attempting to launch...`);
-                
-                // --- REMOTE LAUNCH LOGIC (macOS) ---
-                // Use 'open -n -a Antigravity' to ensure a new instance is spawned if possible
-                const launchCmd = `open -n -a Antigravity --args --remote-debugging-port=${workspace.port} "${workspace.path}"`;
-                
-                exec(launchCmd, (launchErr) => {
-                    if (launchErr) {
-                        console.error(`❌ Launch failed for ${workspace.name}:`, launchErr.message);
-                    } else {
-                        console.log(`✅ Launch command sent for ${workspace.name}`);
-                    }
-                });
-
-                res.json({ 
-                    success: true, 
-                    warning: `Launching ${workspace.name} on your Mac...`,
-                    isLaunching: true 
-                });
-            }
-        });
-
-        // Kill any existing process on the port before starting
-        await killPortProcess(SERVER_PORT);
-
-        // Start server
         const localIP = getLocalIP();
-        const protocol = hasSSL ? 'https' : 'http';
         server.listen(SERVER_PORT, '0.0.0.0', () => {
-            console.log(`🚀 Server running on ${protocol}://${localIP}:${SERVER_PORT}`);
-            if (hasSSL) {
-                console.log(`💡 First time on phone? Accept the security warning to proceed.`);
-            }
+            console.log(`🚀 Server running on http://${localIP}:${SERVER_PORT}`);
         });
-
-        // Graceful shutdown handlers
-        const gracefulShutdown = (signal) => {
-            console.log(`\n🛑 Received ${signal}. Shutting down gracefully...`);
-            wss.close(() => {
-                console.log('   WebSocket server closed');
-            });
-            server.close(() => {
-                console.log('   HTTP server closed');
-            });
-            if (cdpConnection?.ws) {
-                cdpConnection.ws.close();
-                console.log('   CDP connection closed');
-            }
-            setTimeout(() => process.exit(0), 1000);
-        };
-
-        process.on('SIGINT', () => gracefulShutdown('SIGINT'));
-        process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
-
     } catch (err) {
-        console.error('❌ Fatal error:', err.message);
-        process.exit(1);
+        console.error('💥 Fatal error:', err.message);
     }
 }
 
