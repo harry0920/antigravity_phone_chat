@@ -222,9 +222,25 @@ def main():
 
             elif provider == 'cloudflare':
                 cf_name = os.environ.get('CLOUDFLARE_TUNNEL_NAME') or os.environ.get('CLOUDFLARE_TUNNEL_ID')
+                cf_token = os.environ.get('CLOUDFLARE_TUNNEL_TOKEN')
                 cf_custom_url = os.environ.get('CLOUDFLARE_TUNNEL_URL')
 
-                if cf_name:
+                if cf_token:
+                    print(f"PLEASE WAIT... Starting Persistent Cloudflare Tunnel (via Token)...")
+                    cf_cmd = ["cloudflared", "tunnel", "run", "--token", cf_token]
+                    public_url = cf_custom_url
+                    
+                    if not public_url:
+                        print("⚠️  Warning: CLOUDFLARE_TUNNEL_URL not set. QR Code might be incorrect.")
+                        public_url = "https://your-cloudflare-hostname.com"
+                    
+                    try:
+                        cf_process = subprocess.Popen(cf_cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                        time.sleep(2)
+                    except FileNotFoundError:
+                        print("❌ Error: 'cloudflared' binary not found.")
+                        sys.exit(1)
+                elif cf_name:
                     print(f"PLEASE WAIT... Starting Persistent Cloudflare Tunnel: {cf_name}...")
                     # For a named tunnel, the user usually has it configured to point to localhost:PORT
                     # We run it using the name/ID.

@@ -13,6 +13,8 @@ const historyBtn = document.getElementById('historyBtn');
 
 const modeBtn = document.getElementById('modeBtn');
 const modelBtn = document.getElementById('modelBtn');
+const workspaceBtn = document.getElementById('workspaceBtn');
+const workspaceText = document.getElementById('workspaceText');
 const modalOverlay = document.getElementById('modalOverlay');
 const modalList = document.getElementById('modalList');
 const modalTitle = document.getElementById('modalTitle');
@@ -41,10 +43,26 @@ let idleTimer = null;
 let lastHash = '';
 let currentMode = 'Fast';
 let chatIsOpen = true; // Track if a chat is currently open
+let activePort = 9000;
+let workspaces = [];
+let currentWorkspaceId = null;
 
 
 // --- Auth Utilities ---
 async function fetchWithAuth(url, options = {}) {
+    // Append port to GET requests
+    if (!options.method || options.method === 'GET') {
+        const separator = url.includes('?') ? '&' : '?';
+        url += `${separator}port=${activePort}`;
+    } else if (options.method === 'POST') {
+        // Add port to POST body
+        try {
+            const body = JSON.parse(options.body || '{}');
+            body.port = activePort;
+            options.body = JSON.stringify(body);
+        } catch (e) {}
+    }
+
     // Add ngrok skip warning header to all requests
     if (!options.headers) options.headers = {};
     options.headers['ngrok-skip-browser-warning'] = 'true';
@@ -96,6 +114,21 @@ async function checkSslStatus() {
     if (localStorage.getItem('sslBannerDismissed')) return;
 
     sslBanner.style.display = 'flex';
+}
+
+async function fetchWorkspaces() {
+    try {
+        const res = await fetchWithAuth('/api/workspaces');
+        const data = await res.json();
+        workspaces = data.workspaces || [];
+        currentWorkspaceId = data.currentWorkspaceId;
+
+        const active = workspaces.find(w => w.id === currentWorkspaceId);
+        if (active && workspaceText) {
+            workspaceText.textContent = active.name;
+        }
+        console.log('[SYNC] Workspaces loaded:', workspaces);
+    } catch (e) { console.error('[SYNC] Failed to fetch workspaces', e); }
 }
 
 async function enableHttps() {
@@ -1020,9 +1053,13 @@ function openModal(title, options, onSelect) {
     options.forEach(opt => {
         const div = document.createElement('div');
         div.className = 'modal-option';
-        div.textContent = opt;
+        // Handle both string options and {label, value} objects
+        const label = typeof opt === 'object' ? opt.label : opt;
+        const value = typeof opt === 'object' ? opt.value : opt;
+        
+        div.textContent = label;
         div.addEventListener('click', () => {
-            onSelect(opt);
+            onSelect(value);
             closeModal();
         });
         modalList.appendChild(div);
@@ -1084,6 +1121,61 @@ modelBtn.addEventListener('click', () => {
         }
     });
 });
+
+if (workspaceBtn) {
+    workspaceBtn.addEventListener('click', () => {
+        const options = workspaces.map(w => ({ label: w.name, value: w.id }));
+        openModal('Select Workspace', options, async (id) => {
+            const workspace = workspaces.find(w => w.id === id);
+            if (!workspace) return;
+
+            const prev = workspaceText.textContent;
+            workspaceText.textContent = 'Switching...';
+
+            try {
+                const res = await fetchWithAuth('/api/switch-workspace', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ id: workspace.id })
+                });
+                const data = await res.json();
+                
+                if (data.success) {
+                    if (data.isLaunching) {
+                        workspaceText.textContent = '🚀 Launching...';
+                        console.log('[WORKSPACE] Launching project on Mac:', workspace.name);
+                        // Poll more frequently for a few seconds to catch the new instance
+                        let launchChecks = 0;
+                        const checkInt = setInterval(() => {
+                            loadSnapshot();
+                            if (chatIsOpen || launchChecks > 15) clearInterval(checkInt);
+                            launchChecks++;
+                        }, 2000);
+                    } else {
+                        workspaceText.textContent = workspace.name;
+                        currentWorkspaceId = workspace.id;
+                        activePort = workspace.port;
+                        
+                        // FORCE clear old state
+                        lastHash = '';
+                        chatContent.innerHTML = '<div class="loading-state"><div class="loading-spinner"></div><div>Connecting to project...</div></div>';
+                        
+                        // Trigger immediate refresh and follow up to catch auto-resume
+                        setTimeout(loadSnapshot, 100);
+                        setTimeout(loadSnapshot, 1000);
+                        setTimeout(loadSnapshot, 3000);
+                        fetchAppState();
+                    }
+                } else {
+                    alert('Error: ' + (data.error || 'Unknown'));
+                    workspaceText.textContent = prev;
+                }
+            } catch (e) {
+                workspaceText.textContent = prev;
+            }
+        });
+    });
+}
 
 // --- Viewport / Keyboard Handling ---
 // This fixes the issue where the keyboard hides the input or layout breaks
@@ -1276,7 +1368,9 @@ chatContent.addEventListener('click', (e) => {
 connectWebSocket();
 // Sync state initially and every 5 seconds to keep phone in sync with desktop changes
 fetchAppState();
+fetchWorkspaces();
 setInterval(fetchAppState, 5000);
+setInterval(fetchWorkspaces, 15000);
 
 // Check chat status initially and periodically
 checkChatStatus();

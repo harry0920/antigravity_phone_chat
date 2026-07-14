@@ -26,7 +26,7 @@ if [ ! -d "node_modules" ]; then
 fi
 
 # 2. Check Node.js
-if ! command -v node &> /dev/null; then
+if ! PATH="/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:$PATH" command -v node &> /dev/null; then
     echo "[ERROR] Node.js is not installed."
     exit 1
 fi

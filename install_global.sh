@@ -5,7 +5,7 @@ echo "  Antigravity Phone Connect - Global Installer"
 echo "==================================================="
 
 # Define target directories
-GLOBAL_DIR="$HOME/Anti Gravity Projects/Global_Phone_Connect"
+GLOBAL_DIR="$HOME/.antigravity-phone-connect"
 BIN_DIR="$HOME/.local/bin"
 
 # 1. Create the global directory
@@ -14,7 +14,7 @@ mkdir -p "$GLOBAL_DIR"
 
 # 2. Copy the contents of this folder to the global directory
 cp -R ./* "$GLOBAL_DIR/"
-cp -R ./.* "$GLOBAL_DIR/" 2>/dev/null || true # Copy hidden files like .env
+cp -R ./.[!.]* "$GLOBAL_DIR/" 2>/dev/null || true # Copy hidden files safely
 
 echo "✅ Moved to: $GLOBAL_DIR"
 
